@@ -105,29 +105,29 @@ def build_sh(out_dir):
 
 
 def build_ps1(out_dir):
-    tpl_path = PS1_TEMPLATE
-    if not tpl_path.exists():
-        die(f"Template {tpl_path.name} tidak ditemukan!")
+    tpl_bytes = PS1_TEMPLATE.read_bytes()
+    
+    # Cari pola payload secara fleksibel tanpa terikat line-ending yang kaku
+    # Kita cari penanda awal dan akhir blok payload
+    start_marker = b"$script:Payload = @'"
+    end_marker = b"'@"
+    
+    if tpl_bytes.count(start_marker) != 1 or tpl_bytes.count(end_marker) < 1:
+        die(f"blok $script:Payload = @' ... '@ harus tepat satu di {PS1_TEMPLATE.name}")
         
-    tpl_bytes = tpl_path.read_bytes()
+    # Buat payload zip yang akan disisipkan
     body = wrap64(make_zip(payload_files(with_ico=True)), b"\r\n")
     
-    # Cek apakah ada penanda @@PAYLOAD@@ atau $script:Payload di template
-    if b"@@PAYLOAD@@" in tpl_bytes:
-        new_ps1_bytes = tpl_bytes.replace(b"@@PAYLOAD@@", body)
-    elif b"$script:Payload = @'" in tpl_bytes:
-        # Timpa langsung blok payload secara aman tanpa regex yang rewel
-        start_marker = b"$script:Payload = @'"
-        end_marker = b"'@"
-        start_idx = tpl_bytes.find(start_marker) + len(start_marker)
-        end_idx = tpl_bytes.find(end_marker, start_idx)
-        new_ps1_bytes = tpl_bytes[:start_idx] + b"\r\n" + body + b"\r\n" + tpl_bytes[end_idx:]
-    else:
-        die(f"Format penanda payload di {tpl_path.name} tidak dikenali!")
-        
-    out = out_dir / tpl_path.name
+    # Ganti bagian di antara penanda
+    start_idx = tpl_bytes.find(start_marker) + len(start_marker)
+    end_idx = tpl_bytes.find(end_marker, start_idx)
+    
+    # Rakit ulang file ps1 dengan payload baru di tengahnya
+    new_ps1_bytes = tpl_bytes[:start_idx] + b"\r\n" + body + b"\r\n" + tpl_bytes[end_idx:]
+    
+    out = out_dir / PS1_TEMPLATE.name
     out.write_bytes(new_ps1_bytes)
-    return
+    return out
 
 
 def verify(sh, ps1):

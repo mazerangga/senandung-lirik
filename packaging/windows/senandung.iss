@@ -58,7 +58,7 @@ Name: "autostart"; Description: "{cm:TaskAutostart}"; Flags: unchecked
 Name: "desktopicon"; Description: "{cm:TaskDesktopIcon}"; Flags: unchecked
 
 [Files]
-Source: "{#BuildRoot}\dist\Senandung\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#BuildRoot}\dist\Senandung.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
