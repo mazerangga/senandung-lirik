@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+build/
+dist/
+*.spec
+*.log
+# lirik hasil unduhan (hak cipta pihak lain) jangan ikut di-commit
+*.lrc
+lyrics/
