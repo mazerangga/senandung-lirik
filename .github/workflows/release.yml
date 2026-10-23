@@ -1,0 +1,73 @@
+name: Build and Release Senandung
+
+on:
+  push:
+    tags:
+      - 'v*'  # Otomatis berjalan setiap kali Anda push tag versi (contoh: v1.1)
+
+jobs:
+  build-installers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build Installers (.sh & .ps1)
+        run: |
+          # Jalankan skrip pembangun installer
+          python tools/build_installers.py
+
+      - name: Upload Installers Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers
+          path: dist/
+
+  build-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller and Dependencies
+        run: |
+          pip install pyinstaller PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
+
+      - name: Build Windows EXE
+        run: |
+          pyinstaller --noconfirm --windowed --icon=assets/icons/senandung.ico --name="Senandung" senandung.py
+
+      - name: Upload EXE Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dist/Senandung.exe
+
+  release:
+    needs: [build-installers, build-exe]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Wajib agar bot GitHub memiliki akses membuat rilis dan mengunggah file
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Create GitHub Release & Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            all-artifacts/installers/*
+            all-artifacts/windows-exe/Senandung.exe
+          generate_release_notes: true # Membuat changelog otomatis dari riwayat commit
