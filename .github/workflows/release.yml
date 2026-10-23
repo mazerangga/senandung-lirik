@@ -3,7 +3,7 @@ name: Build and Release Senandung
 on:
   push:
     tags:
-      - 'v*'  # Otomatis berjalan setiap kali Anda push tag versi (contoh: v1.1)
+      - 'v*'
 
 jobs:
   build-installers:
@@ -19,7 +19,6 @@ jobs:
 
       - name: Build Installers (.sh & .ps1)
         run: |
-          # Jalankan skrip pembangun installer
           python tools/build_installers.py
 
       - name: Upload Installers Artifact
@@ -57,7 +56,7 @@ jobs:
     needs: [build-installers, build-exe]
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Wajib agar bot GitHub memiliki akses membuat rilis dan mengunggah file
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -70,4 +69,4 @@ jobs:
           files: |
             all-artifacts/installers/*
             all-artifacts/windows-exe/Senandung.exe
-          generate_release_notes: true # Membuat changelog otomatis dari riwayat commit
+          generate_release_notes: true
