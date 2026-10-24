@@ -42,10 +42,11 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
 | Sumber lirik | API **LRCLIB** (HTTP + JSON, lewat `urllib` bawaan Python) |
 | Romanisasi (opsional) | `pykakasi`, `pypinyin`, `korean-romanizer`, `unidecode` |
 | Installer Linux | **Bash** (`install-senandung.sh`) |
-| Installer Windows | **PowerShell** (`install-senandung.ps1`) dan **Inno Setup** (`senandung.iss`) |
-| Build `.exe` Windows | **PyInstaller** |
+| Installer Windows | **PowerShell** (`install-senandung.ps1`) dan **Inno Setup** (`senandung.iss`, menghasilkan Setup `.exe` beserta uninstaller) |
+| Build `.exe` Windows | **PyInstaller** (`--onefile`) |
 | Skrip ikon | Python + **Pillow** + **NumPy** (`tools/make_icons.py`) |
 | Pembuat installer | Python (`tools/build_installers.py`), hanya library standar |
+| Rilis otomatis | **GitHub Actions** (`.github/workflows/release.yml`) |
 
 ## Bahasa antarmuka
 
@@ -57,7 +58,17 @@ Pesan log (konsol dan berkas log) selalu berbahasa Inggris supaya laporan bug mu
 
 ## Instalasi
 
-File di `packaging/` adalah **template** tanpa isi aplikasi, jadi jangan dijalankan langsung. Ambil installer jadi dari halaman **Releases**, atau buat sendiri dari source:
+Cara termudah: ambil file jadi dari halaman **Releases**. Setiap rilis berisi:
+
+| File | Untuk |
+| --- | --- |
+| `Senandung-Setup-<versi>.exe` | Windows, installer bergaya wizard (tanpa perlu Python). Sudah termasuk uninstaller. |
+| `install-senandung.ps1` | Windows, installer PowerShell (butuh Python 3.10+). |
+| `install-senandung.sh` | Linux. |
+| `Senandung.exe` | Windows, aplikasi saja tanpa installer (portabel). |
+| `SHA256SUMS` | Checksum untuk `.sh` dan `.ps1`. |
+
+File di `packaging/` adalah **template** tanpa isi aplikasi, jadi jangan dijalankan langsung. Untuk membuat installer sendiri dari source:
 
 ```bash
 pip install pillow numpy             # hanya perlu bila ikon belum dibuat
@@ -81,7 +92,11 @@ Setelah terpasang, jalankan `senandung` dari terminal atau menu aplikasi.
 
 ### Windows
 
-Butuh Python 3.10+ 64-bit (`winget install Python.Python.3.12`). Pemasangan per-user ke `%LOCALAPPDATA%\senandung`, tanpa admin.
+Ada dua cara memasang. Keduanya per-user, tanpa admin.
+
+**Cara 1: Setup `.exe` (paling mudah).** Unduh `Senandung-Setup-<versi>.exe` dari Releases lalu jalankan. Tidak perlu memasang Python. Wizard menyediakan bahasa Indonesia dan Inggris, pilihan mulai otomatis saat login, dan ikon desktop. Aplikasi dipasang ke `%LOCALAPPDATA%\Programs\Senandung` (atau `Program Files` bila kamu memilih mode admin). Karena belum ditandatangani sertifikat code signing, Windows SmartScreen bisa menampilkan peringatan: klik **More info**, lalu **Run anyway**.
+
+**Cara 2: PowerShell.** Butuh Python 3.10+ 64-bit (`winget install Python.Python.3.12`). Dipasang ke `%LOCALAPPDATA%\senandung`.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install-senandung.ps1
@@ -89,7 +104,13 @@ powershell -ExecutionPolicy Bypass -File install-senandung.ps1
 
 Opsi: `-Autostart` (jalan saat login), `-BuildExe` (buat `Senandung.exe` lewat PyInstaller), `-Lang id|en` (bahasa installer; bawaan mengikuti Windows), `-Uninstall` (tambah `-Purge` untuk hapus pengaturan).
 
-Untuk membuat installer `.exe` bergaya wizard: jalankan dulu `-BuildExe`, lalu compile `packaging\windows\senandung.iss` dengan Inno Setup 6.3+. Wizard memberi pilihan bahasa Indonesia atau Inggris. Bila Inno Setup kamu belum punya `Indonesian.isl`, unduh dari [terjemahan tidak resmi](https://jrsoftware.org/files/istrans/) ke folder `Languages` milik Inno; tanpa file itu wizard hanya berbahasa Inggris.
+**Uninstall di Windows.** Untuk kedua cara, buka **Settings > Apps > Installed apps**, pilih **Senandung**, lalu **Uninstall** (juga tersedia di Control Panel > Programs and Features).
+
+- Pemasangan lewat Setup `.exe`: uninstaller-nya `unins000.exe` di folder pemasangan, dibuat otomatis oleh Inno Setup. Pengaturan aplikasi (registri `HKCU\Software\Senandung`) tidak ikut dihapus.
+- Pemasangan lewat `.ps1`: installer menyimpan salinan dirinya sebagai `%LOCALAPPDATA%\senandung\uninstall.ps1`, jadi berkas installer asli tidak perlu disimpan. Tanpa lewat Apps, jalankan `powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\senandung\uninstall.ps1" -Uninstall` (tambah `-Purge` untuk menghapus pengaturan). Folder lirik tidak ikut dihapus. Fitur ini hanya ada pada pemasangan yang dibuat dengan installer `.ps1` terbaru; pemasangan lama dihapus dengan `install-senandung.ps1 -Uninstall`.
+- Jangan memasang dengan kedua cara sekaligus. Bila ingin pindah cara, uninstall dulu yang lama supaya tidak muncul dua entri Senandung di daftar Apps.
+
+**Membuat installer Windows sendiri.** Jalankan dulu `-BuildExe`, lalu compile `packaging\windows\senandung.iss` dengan Inno Setup 6.3+. Wizard memberi pilihan bahasa Indonesia atau Inggris. Bila Inno Setup kamu belum punya `Indonesian.isl`, unduh dari [terjemahan tidak resmi](https://jrsoftware.org/files/istrans/) ke folder `Languages` milik Inno; tanpa file itu wizard hanya berbahasa Inggris. Versi dan jalur file bisa diatur lewat variabel lingkungan `SENANDUNG_VERSION`, `SENANDUNG_EXE`, `SENANDUNG_ICON`, dan `SENANDUNG_OUT` (dipakai oleh GitHub Actions).
 
 ### Manual (dari source)
 
@@ -137,11 +158,38 @@ Buka lewat menu klik kanan, **Pengaturan…**. Beberapa yang paling sering dipak
 
 Kamu juga bisa menaruh `.lrc` buatan sendiri di folder lirik; berkas lokal selalu dipakai lebih dulu sebelum mencari online.
 
+## Merilis versi baru (untuk maintainer)
+
+Rilis dibuat otomatis oleh GitHub Actions (`.github/workflows/release.yml`) setiap kali tag berawalan `v` di-push:
+
+```bash
+git push                         # pastikan semua perubahan sudah di GitHub
+git tag v1.0.1
+git push origin v1.0.1           # memicu build dan rilis
+```
+
+Workflow membuat installer `.sh` dan `.ps1`, membangun `Senandung.exe` (PyInstaller `--onefile`), mengompilasi `Senandung-Setup-<versi>.exe` (Inno Setup), lalu mengunggah semuanya ke halaman Releases. Nomor versi pada Setup `.exe` diambil dari nama tag.
+
+Catatan:
+
+- GitHub Actions memakai **commit yang ditunjuk tag**. Bila memperbaiki kode setelah tag dibuat, tag lama tetap memakai kode lama dan tombol *Re-run* tidak membantu. Pindahkan tag ke commit baru:
+  ```bash
+  git tag -d v1.0.1
+  git push origin :refs/tags/v1.0.1
+  git tag v1.0.1
+  git push origin v1.0.1
+  ```
+  Bila rilis dengan tag itu sudah terlanjur ada di halaman Releases, hapus dulu rilisnya.
+- Perbarui nomor versi di `$Version` pada `packaging/windows/install-senandung.ps1` dan bawaan `AppVersion` di `senandung.iss` agar sama dengan tag.
+- Cek build installer secara lokal sebelum tag: `python3 tools/build_installers.py`.
+
 ## Struktur repo
 
 ```
 senandung-lirik/
 ├── senandung.py                   # aplikasi utama
+├── .github/workflows/release.yml  # rilis otomatis saat tag v* di-push
+├── .gitattributes                 # menyeragamkan ujung baris (LF/CRLF)
 ├── assets/icons/
 │   ├── source/                    # gambar sumber ikon (neon)
 │   ├── png/senandung-<n>.png      # ikon aplikasi, 16 ... 512 px
@@ -181,6 +229,10 @@ Setelah ikon atau kode berubah, jalankan `python3 tools/build_installers.py` sup
 - **Ikon tray tidak muncul di GNOME**: GNOME butuh ekstensi AppIndicator agar ikon tray tampil.
 - **Lirik tidak muncul**: cek `--list-players` apakah pemutar terdeteksi dan tidak masuk blacklist. Lagu yang tidak ada di LRCLIB tidak akan punya lirik; kamu bisa menyediakan `.lrc` sendiri.
 - **Log di Windows** (saat jalan tanpa konsol): `%LOCALAPPDATA%\senandung.log`.
+- **SmartScreen memperingatkan saat membuka Setup `.exe`** (Windows): berkas belum ditandatangani. Klik **More info**, lalu **Run anyway**.
+- **"running scripts is disabled on this system"** (Windows): jalankan `.ps1` dengan `powershell -ExecutionPolicy Bypass -File ...`.
+- **Uninstall `.ps1` berhenti dengan "Folder belum bisa dihapus"** (Windows): Senandung masih berjalan. Keluar dari ikon tray, lalu ulangi.
+- **GitHub Actions gagal atau rilis tidak terbentuk**: buka tab *Actions*, lihat langkah yang berwarna merah. Pastikan tag menunjuk commit yang sudah berisi perbaikan (lihat *Merilis versi baru*).
 
 ## Kredit dan catatan
 
