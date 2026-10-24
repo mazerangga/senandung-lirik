@@ -9,3 +9,5 @@ dist/
 # lirik hasil unduhan (hak cipta pihak lain) jangan ikut di-commit
 *.lrc
 lyrics/
+installer-out/
+Senandung-Setup-*.exe

@@ -44,14 +44,78 @@ jobs:
           pip install pyinstaller PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
 
       - name: Build Windows EXE
+        shell: pwsh
         run: |
-          pyinstaller --noconfirm --onefile --windowed --icon=assets/icons/senandung.ico --name="Senandung" senandung.py
+          # Opsi disamakan dengan "install-senandung.ps1 -BuildExe", ditambah --onefile
+          $pi = @(
+            "--noconfirm", "--clean", "--onefile", "--windowed",
+            "--name", "Senandung", "--icon", "assets/icons/senandung.ico",
+            "--collect-data", "pykakasi", "--collect-submodules", "unidecode",
+            "--hidden-import", "pypinyin", "--hidden-import", "korean_romanizer.romanizer",
+            "--collect-all", "winrt.windows.media.control", "--collect-all", "winrt.windows.foundation",
+            "--collect-all", "winrt.windows.foundation.collections", "--collect-all", "winrt.windows.storage.streams",
+            "--exclude-module", "PySide6.QtQml", "--exclude-module", "PySide6.QtQuick",
+            "--exclude-module", "PySide6.QtQuickWidgets", "--exclude-module", "PySide6.QtWebEngineCore",
+            "--exclude-module", "PySide6.QtWebEngineWidgets", "--exclude-module", "PySide6.QtWebChannel",
+            "--exclude-module", "PySide6.Qt3DCore", "--exclude-module", "PySide6.QtMultimedia",
+            "--exclude-module", "PySide6.QtPdf", "--exclude-module", "PySide6.QtCharts",
+            "--exclude-module", "PySide6.QtSql", "--exclude-module", "PySide6.QtOpenGL",
+            "--exclude-module", "PySide6.QtSvg", "--exclude-module", "PySide6.QtDesigner",
+            "--exclude-module", "PySide6.QtTest", "--exclude-module", "PySide6.QtHelp",
+            "--exclude-module", "tkinter",
+            "--add-data", "assets;assets",
+            "senandung.py"
+          )
+          pyinstaller @pi
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path dist/Senandung.exe)) { Write-Error "dist/Senandung.exe tidak terbentuk"; exit 1 }
 
       - name: Upload EXE Artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-exe
           path: dist/Senandung.exe
+          if-no-files-found: error
+
+      # Setup bergaya wizard (Inno Setup). Otomatis membuat unins000.exe dan mendaftarkan
+      # Senandung di Settings > Apps > Installed apps, lengkap dengan tombol Uninstall.
+      - name: Build Setup installer (Inno Setup)
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          if (-not (Test-Path $iscc)) { Write-Error "ISCC.exe tidak ditemukan"; exit 1 }
+
+          # Terjemahan Indonesia (tidak resmi). Bila gagal diunduh, wizard tetap jadi, hanya Inggris.
+          $isl = Join-Path (Split-Path $iscc) "Languages\Indonesian.isl"
+          try {
+            Invoke-WebRequest -UseBasicParsing -OutFile $isl `
+              "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/Indonesian.isl"
+          } catch { Write-Warning "Indonesian.isl tidak terunduh: $_" }
+
+          $env:SENANDUNG_VERSION = $env:REF_NAME.TrimStart('v')
+          $env:SENANDUNG_EXE     = Join-Path $env:GITHUB_WORKSPACE "dist\Senandung.exe"
+          $env:SENANDUNG_ICON    = Join-Path $env:GITHUB_WORKSPACE "assets\icons\senandung.ico"
+          $env:SENANDUNG_OUT     = Join-Path $env:GITHUB_WORKSPACE "installer-out"
+
+          & $iscc "packaging\windows\senandung.iss"
+          if ($LASTEXITCODE -ne 0 -and (Test-Path $isl)) {
+            Write-Warning "Compile gagal dengan Indonesian.isl, mengulang tanpa bahasa Indonesia"
+            Remove-Item -Force $isl
+            & $iscc "packaging\windows\senandung.iss"
+          }
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Upload Setup Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-setup
+          path: installer-out/*.exe
+          if-no-files-found: error
 
   release:
     needs: [build-installers, build-exe]
@@ -70,4 +134,5 @@ jobs:
           files: |
             all-artifacts/installers/*
             all-artifacts/windows-exe/Senandung.exe
+            all-artifacts/windows-setup/*.exe
           generate_release_notes: true # Membuat changelog otomatis dari riwayat commit
