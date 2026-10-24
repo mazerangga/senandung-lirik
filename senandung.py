@@ -948,17 +948,19 @@ class WinBackend(QObject):
 
 def make_backend(get_filter):
     if IS_LINUX:
+        # playerctl dipakai sebagai backend utama. Backend D-Bus (LinuxDBusBackend) di PySide6
+        # melempar TypeError saat start (bus.connect) dan tidak bisa membaca metadata, jadi hanya
+        # dipakai sebagai cadangan bila playerctl tidak ada.
+        if shutil.which("playerctl"):
+            return LinuxBackend(get_filter)
         try:
             from PySide6.QtDBus import QDBusConnection
             if QDBusConnection.sessionBus().isConnected():
                 return LinuxDBusBackend(get_filter)
-            print("[senandung] D-Bus session bus not connected. Falling back to playerctl.", file=sys.stderr)
-        except ImportError:
-            print("[senandung] PySide6.QtDBus not available. Falling back to playerctl.", file=sys.stderr)
-            
-        if not shutil.which("playerctl"):
-            print("[senandung] ERROR: playerctl not found for fallback backend.", file=sys.stderr)
-        return LinuxBackend(get_filter)
+        except Exception as e:
+            print(f"[senandung] D-Bus backend unavailable: {e}", file=sys.stderr)
+        print("[senandung] ERROR: playerctl not found and D-Bus backend unavailable.", file=sys.stderr)
+        return None
     if IS_WIN:
         return WinBackend(get_filter)
     return None
