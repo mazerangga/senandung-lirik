@@ -27,6 +27,8 @@ $ExeDir = Join-Path $Prefix "dist\Senandung"
 $Exe    = Join-Path $ExeDir "Senandung.exe"
 $Lnk    = Join-Path ([Environment]::GetFolderPath("Programs")) "Senandung.lnk"
 $RunKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+$UnKey  = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Senandung"   # daftar Settings > Apps
+$UnPs1  = Join-Path $Prefix "uninstall.ps1"
 $Pkgs   = @("PySide6-Essentials", "pykakasi", "pypinyin", "korean-romanizer", "unidecode",
             "winrt-runtime", "winrt-Windows.Media.Control", "winrt-Windows.Foundation",
             "winrt-Windows.Foundation.Collections", "winrt-Windows.Storage.Streams")
@@ -61,6 +63,10 @@ $Msg = @{
     close_hint = "  Close     : tombol close menyembunyikan ke system tray; muncul lagi saat lagu berganti"
     uninstall_lbl = "  Hapus     : "
     log_lbl = "  Log       : "
+    locked = "Folder belum bisa dihapus (masih dipakai). Tutup Senandung lalu jalankan uninstall lagi."
+    apps_entry = "Terdaftar di Settings > Apps (bisa di-uninstall dari sana)"
+    apps_failed = "Gagal mendaftar ke daftar Apps: {0}"
+    no_selfcopy = "Skrip dijalankan tanpa berkas (mis. lewat iex), jadi uninstaller tidak bisa disimpan."
   }
   en = @{
     removing = "Removing Senandung"
@@ -85,6 +91,10 @@ $Msg = @{
     close_hint = "  Close     : the close button hides to the system tray; it reappears when the song changes"
     uninstall_lbl = "  Uninstall : "
     log_lbl = "  Log       : "
+    locked = "The folder could not be removed (still in use). Close Senandung and run uninstall again."
+    apps_entry = "Registered in Settings > Apps (you can uninstall from there)"
+    apps_failed = "Could not register in the Apps list: {0}"
+    no_selfcopy = "The script ran without a file (e.g. via iex), so the uninstaller could not be saved."
   }
 }
 function T($key) {
@@ -111,17 +121,72 @@ function Find-Python {
   return $null
 }
 
+function Remove-Prefix {
+  # Coba beberapa kali: setelah proses dihentikan, Windows kadang butuh jeda untuk melepas kunci file.
+  for ($i = 0; $i -lt 8; $i++) {
+    if (-not (Test-Path -LiteralPath $Prefix)) { return $true }
+    Remove-Item -LiteralPath $Prefix -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not (Test-Path -LiteralPath $Prefix)) { return $true }
+    Start-Sleep -Milliseconds 700
+  }
+  return (-not (Test-Path -LiteralPath $Prefix))
+}
+
 function Do-Uninstall {
+  # Bila dijalankan dari dalam folder pemasangan (uninstall.ps1), salin dulu ke TEMP dan jalankan dari sana
+  # supaya folder pemasangan bisa dihapus utuh.
+  $self = $PSCommandPath
+  if ($self -and -not $env:SENANDUNG_RELAUNCHED -and $self.StartsWith($Prefix + "\", [StringComparison]::OrdinalIgnoreCase)) {
+    $tmp = Join-Path $env:TEMP "senandung-uninstall.ps1"
+    Copy-Item -LiteralPath $self -Destination $tmp -Force
+    $env:SENANDUNG_RELAUNCHED = "1"
+    $a = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $tmp, "-Uninstall", "-Lang", $UI)
+    if ($Purge) { $a += "-Purge" }
+    & powershell.exe @a
+    exit $LASTEXITCODE
+  }
+
   Say (T removing)
   Stop-Running
-  Remove-Item -Recurse -Force $Prefix -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 800
+  if (-not (Remove-Prefix)) { Warn (T locked); exit 1 }
   Remove-Item -Force $Lnk -ErrorAction SilentlyContinue
   Remove-ItemProperty -Path $RunKey -Name "Senandung" -ErrorAction SilentlyContinue
+  Remove-Item -Path $UnKey -Recurse -Force -ErrorAction SilentlyContinue
   if ($Purge) {
     Remove-Item -Recurse -Force "HKCU:\Software\$App" -ErrorAction SilentlyContinue
     Say (T purged)
   }
   Say (T uninstalled)
+  if ($env:SENANDUNG_RELAUNCHED) {
+    Start-Sleep -Seconds 3          # beri waktu membaca pesan bila jendela dibuka dari daftar Apps
+    Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Register-Uninstaller {
+  # Simpan salinan installer ini sebagai uninstall.ps1 lalu daftarkan ke Settings > Apps.
+  $src = $PSCommandPath
+  if (-not $src -or -not (Test-Path -LiteralPath $src)) { Warn (T no_selfcopy); return }
+  if ($src -ne $UnPs1) { Copy-Item -LiteralPath $src -Destination $UnPs1 -Force }
+  $cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$UnPs1`" -Uninstall -Lang $UI"
+  $kb = [int][math]::Round(((Get-ChildItem -LiteralPath $Prefix -Recurse -File -ErrorAction SilentlyContinue |
+                             Measure-Object Length -Sum).Sum) / 1KB)
+  New-Item -Path $UnKey -Force | Out-Null
+  $vals = [ordered]@{
+    DisplayName = "Senandung"; DisplayVersion = $Version; Publisher = "mazerangga"
+    DisplayIcon = $Ico; InstallLocation = $Prefix
+    UninstallString = $cmd; QuietUninstallString = $cmd
+    URLInfoAbout = "https://github.com/mazerangga/senandung-lirik"
+  }
+  foreach ($k in $vals.Keys) {
+    New-ItemProperty -Path $UnKey -Name $k -Value $vals[$k] -PropertyType String -Force | Out-Null
+  }
+  foreach ($k in "NoModify", "NoRepair") {
+    New-ItemProperty -Path $UnKey -Name $k -Value 1 -PropertyType DWord -Force | Out-Null
+  }
+  New-ItemProperty -Path $UnKey -Name "EstimatedSize" -Value $kb -PropertyType DWord -Force | Out-Null
+  Say (T apps_entry)
 }
 
 function Do-Install {
@@ -193,6 +258,8 @@ function Do-Install {
   $s.IconLocation = $Ico; $s.Description = "Synced, transparent on-screen lyrics overlay"
   $s.Save()
 
+  try { Register-Uninstaller } catch { Warn (T apps_failed $_.Exception.Message) }
+
   if ($Autostart) {
     $cmd = if ($args2) { "`"$target`" $args2" } else { "`"$target`"" }
     New-ItemProperty -Path $RunKey -Name "Senandung" -Value $cmd -PropertyType String -Force | Out-Null
@@ -204,7 +271,7 @@ function Do-Install {
   Write-Host (T run_hint)
   Write-Host ((T preview_lbl) + "`"$Pyw`" `"$Script`" --demo")
   Write-Host (T close_hint)
-  Write-Host ((T uninstall_lbl) + "...\install-senandung.ps1 -Uninstall")
+  Write-Host ((T uninstall_lbl) + "Settings > Apps > Senandung,  or:  powershell -ExecutionPolicy Bypass -File `"$UnPs1`" -Uninstall")
   Write-Host ((T log_lbl) + "$env:LOCALAPPDATA\senandung.log")
 }
 
