@@ -679,6 +679,11 @@ DEMO = [
 ]
 
 TB_H = 26                                    # tinggi strip toolbar (mode dua baris menyisakannya)
+# Interval tick (ms). Makin besar = makin hemat CPU, animasi makin kurang halus.
+TICK_BUSY_MS = 50                            # lagu main / scroll bergerak (~20 fps; 33 = ~30 fps)
+TICK_IDLE_MS = 150                           # diam (dijeda / tanpa animasi)
+TICK_HIDDEN_MS = 250                         # jendela disembunyikan ke tray: tidak ada yang digambar
+FILL_CACHE_BYTES = 24 * 1024 * 1024          # batas memori cache isian teks (pixmap)
 TOOLBAR = ["prev", "play", "next", "mode", "lock", "gear", "close"]
 
 
@@ -716,6 +721,8 @@ class OSD(QWidget):
         self.scroll = 0.0
         self._sig = None                 # ringkasan tampilan terakhir yang digambar (lihat tick)
         self._glyph_cache = {}           # bentuk huruf + garis tepi siap pakai (LRU, lihat _glyphs)
+        self._fill_cache = {}            # pixmap isian teks per (glyph, warna) (LRU berbatas byte)
+        self._fill_bytes = 0
         self.track_key = ""
         self.last_key = ""
         self.note = ""
@@ -733,7 +740,7 @@ class OSD(QWidget):
         self.loader.done.connect(self.on_lyrics)
 
         self.backend = None
-        self.tick_timer = QTimer(self, interval=33, timeout=self.tick)
+        self.tick_timer = QTimer(self, interval=TICK_BUSY_MS, timeout=self.tick)
         self.tick_timer.start()
         if demo:
             self.lyrics = [{"t": t, "text": a, "roman": b} for t, a, b in DEMO]
@@ -857,6 +864,7 @@ class OSD(QWidget):
         self.hidden_by_user = False
         self.show()
         self.raise_()
+        self.tick()                              # segera sesuaikan interval + gambar ulang
 
     def hide_to_tray(self, notify=True):
         self.save_geom()
@@ -997,9 +1005,10 @@ class OSD(QWidget):
             target = max(self.idx, 0)
             d = target - self.scroll
             self.scroll = target if abs(d) > 8 or abs(d) < 0.002 else self.scroll + d * 0.28
-        # 33 ms saat ada yang bergerak (lagu main / scroll belum berhenti); 100 ms saat diam
+        # cepat saat ada yang bergerak (lagu main / scroll belum berhenti), lambat saat diam,
+        # dan paling lambat saat jendela disembunyikan (tidak ada yang digambar)
         busy = self.play_state == "Playing" or abs(max(self.idx, 0) - self.scroll) > 0.002
-        want = 33 if busy else 100
+        want = TICK_HIDDEN_MS if not self.isVisible() else TICK_BUSY_MS if busy else TICK_IDLE_MS
         if self.tick_timer.interval() != want:
             self.tick_timer.setInterval(want)
         if self.isVisible() and (self.lyrics or self.hover or self.toast or self.note):
@@ -1066,32 +1075,60 @@ class OSD(QWidget):
             path = QPainterPath()
             path.addText(0, 0, font, text)           # titik asal = garis dasar, sisi kiri
             g = {"path": path, "w": w, "asc": fm.ascent(), "desc": fm.descent(),
-                 "h": fm.height(), "size": font.pointSizeF(), "outline": None}
+                 "h": fm.height(), "size": font.pointSizeF(), "outline": None, "key": key}
             while len(self._glyph_cache) >= 48:
                 self._glyph_cache.pop(next(iter(self._glyph_cache)))
         self._glyph_cache[key] = g
         return g
+
+    def _layer_geom(self, g):
+        """Geometri pixmap lapisan teks (outline & isian memakai ukuran yang sama):
+        (pad, base, lebar, tinggi) dalam piksel logis; base = garis dasar di dalam pixmap."""
+        pw = max(2.0, g["size"] / 7)
+        pad = int(pw) + 3
+        base = int(g["asc"]) + 1 + pad
+        return pad, base, int(g["w"]) + 2 * pad + 2, base + int(g["desc"]) + 1 + pad
+
+    def _new_layer(self, g):
+        pad, base, wl, hl = self._layer_geom(g)
+        dpr = self.devicePixelRatioF()
+        pm = QPixmap(int(wl * dpr), int(hl * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
+        q.translate(pad, base)
+        return pm, q
 
     def _outline(self, g):
         """Garis tepi hitam dirender sekali ke pixmap. strokePath dengan antialiasing adalah
         bagian paling mahal (puluhan kali lipat addText); menempel pixmap hampir gratis."""
         if g["outline"] is None:
             pw = max(2.0, g["size"] / 7)
-            pad = int(pw) + 3
-            base = int(g["asc"]) + 1 + pad                       # garis dasar di dalam pixmap
-            dpr = self.devicePixelRatioF()
-            wl, hl = int(g["w"]) + 2 * pad + 2, base + int(g["desc"]) + 1 + pad
-            pm = QPixmap(int(wl * dpr), int(hl * dpr))
-            pm.setDevicePixelRatio(dpr)
-            pm.fill(Qt.GlobalColor.transparent)
-            q = QPainter(pm)
-            q.setRenderHint(QPainter.RenderHint.Antialiasing)
-            q.translate(pad, base)
+            pm, q = self._new_layer(g)
             q.strokePath(g["path"], QPen(QColor(0, 0, 0, 215), pw, Qt.PenStyle.SolidLine,
                                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             q.end()
+            pad, base = self._layer_geom(g)[:2]
             g["outline"] = (pm, pad, base)
         return g["outline"]
+
+    def _fill(self, g, color):
+        """Isian teks (warna/gradien) dirender sekali ke pixmap lalu dipakai ulang tiap frame.
+        fillPath dengan gradien tiap frame adalah sumber CPU terbesar. Cache LRU dibatasi
+        FILL_CACHE_BYTES; kuncinya memuat glyph, warna, dan pengaturan gradien."""
+        key = (g["key"], color.rgba(), self.s["gradient"])
+        pm = self._fill_cache.pop(key, None)             # pop + simpan lagi = tandai terbaru dipakai
+        if pm is None:
+            pm, q = self._new_layer(g)
+            q.fillPath(g["path"], self._brush(color, -g["asc"], g["desc"]))
+            q.end()
+            self._fill_bytes += pm.width() * pm.height() * 4
+            while self._fill_cache and self._fill_bytes > FILL_CACHE_BYTES:
+                old = self._fill_cache.pop(next(iter(self._fill_cache)))
+                self._fill_bytes -= old.width() * old.height() * 4
+        self._fill_cache[key] = pm
+        return pm
 
     def _draw(self, p, text, yc, color, opa, align, wipe=0.0, scale=1.0):
         """Gambar satu baris (muat otomatis ke lebar jendela) berpusat vertikal di yc."""
@@ -1102,18 +1139,17 @@ class OSD(QWidget):
         x = margin if align == "left" else self.width() - margin - w if align == "right" \
             else (self.width() - w) / 2
         ox, oy = round(x), round(yc + (asc - desc) / 2)    # piksel bulat: pixmap tepi = isi, selalu pas
-        top, bottom = -asc, desc                 # relatif terhadap garis dasar (painter digeser)
         p.setOpacity(opa)
+        pad, base = self._layer_geom(g)[:2]
         if self.s["outline"]:
-            pm, pad, by = self._outline(g)
-            p.drawPixmap(ox - pad, oy - by, pm)
-        p.save()
-        p.translate(ox, oy)
-        p.fillPath(g["path"], self._brush(color, top, bottom))
-        if wipe > 0:
-            p.setClipRect(QRectF(-2, top - 4, w * min(wipe, 1.0) + 2, fh + 8))
-            p.fillPath(g["path"], self._brush(self._kara(), top, bottom))
-        p.restore()
+            p.drawPixmap(ox - pad, oy - base, self._outline(g)[0])
+        p.drawPixmap(ox - pad, oy - base, self._fill(g, color))
+        if wipe > 0:                             # isi warna karaoke dari kiri sampai posisi wipe
+            kara = self._fill(g, self._kara())
+            dpr = kara.devicePixelRatioF()
+            sw = min(kara.width(), int((pad + w * min(wipe, 1.0)) * dpr + 0.5))
+            if sw > 0:
+                p.drawPixmap(ox - pad, oy - base, kara, 0, 0, sw, kara.height())
         p.setOpacity(1.0)
         return fh
 
@@ -1238,7 +1274,7 @@ class OSD(QWidget):
             yc = h / 2 + (j - self.scroll) * rh
             if yc < -rh or yc > h + rh:
                 continue
-            t = max(0.0, 1.0 - d)                                    # 1 = tepat di tengah
+            t = round(max(0.0, 1.0 - d) * 8) / 8                     # 1 = tepat di tengah (8 langkah: cache isian)
             color = QColor(int(base.red() + (hl.red() - base.red()) * t),
                            int(base.green() + (hl.green() - base.green()) * t),
                            int(base.blue() + (hl.blue() - base.blue()) * t))

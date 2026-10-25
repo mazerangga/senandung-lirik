@@ -17,7 +17,7 @@ class LinuxBackend(QObject):
         self.player = None
         self.proc = QProcess(self)
         self.proc.finished.connect(self._done)
-        self.timer = QTimer(self, interval=300, timeout=self._poll)
+        self.timer = QTimer(self, interval=500, timeout=self._poll)   # tiap polling = satu proses baru
 
     def start(self):
         self.timer.start()
