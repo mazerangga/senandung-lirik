@@ -239,7 +239,7 @@ Setelah ikon atau kode berubah, jalankan `python3 tools/build_installers.py` sup
 - Lirik tersinkron diambil dari [LRCLIB](https://lrclib.net), layanan terbuka. Lirik adalah hak cipta pemegangnya; aplikasi ini hanya menampilkannya untuk penggunaan pribadi dan tidak menyertakan lirik di repo.
 - Dibangun dengan [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/).
 - Pengembangan dibantu asisten AI ([Claude](https://www.anthropic.com/claude) dari Anthropic) untuk penulisan kode, installer, dan dokumentasi. Seluruh hasilnya ditinjau dan diuji oleh pemelihara repo.
-- Lisensi: [MIT](LICENSE).
+- Lisensi: [GPL-3.0-or-later](LICENSE).
 
 ## Kontribusi
 

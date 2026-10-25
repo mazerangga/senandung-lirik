@@ -239,7 +239,7 @@ After the icons or the code change, run `python3 tools/build_installers.py` so t
 - Synced lyrics come from [LRCLIB](https://lrclib.net), an open service. Lyrics are the property of their copyright holders; this app only displays them for personal use and does not ship any lyrics in the repository.
 - Built with [Qt for Python (PySide6)](https://doc.qt.io/qtforpython-6/).
 - Developed with the help of an AI assistant ([Claude](https://www.anthropic.com/claude) by Anthropic) for code, installers, and documentation. All output was reviewed and tested by the maintainer.
-- License: [MIT](LICENSE).
+- License: [GPL-3.0-or-later](LICENSE).
 
 ## Contributing
 
