@@ -1,0 +1,22 @@
+# Senandung - dependencies for running from source
+# Install:  python -m pip install -r requirements.txt
+# (Windows: use  py -m pip install -r requirements.txt)
+
+PySide6-Essentials
+
+# Romanization (optional, but the lyrics romanization needs them)
+pykakasi
+pypinyin
+korean-romanizer
+unidecode
+
+# Windows only: read the player via Windows Media Session (SMTC)
+winrt-runtime; sys_platform == "win32"
+winrt-Windows.Media.Control; sys_platform == "win32"
+winrt-Windows.Foundation; sys_platform == "win32"
+winrt-Windows.Foundation.Collections; sys_platform == "win32"
+winrt-Windows.Storage.Streams; sys_platform == "win32"
+
+# Only for tools/make_icons.py (not needed to run the app):
+# pillow
+# numpy

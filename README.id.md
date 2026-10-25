@@ -116,14 +116,28 @@ Opsi: `-Autostart` (jalan saat login), `-BuildExe` (buat `Senandung.exe` lewat P
 
 ### Manual (dari source)
 
+Pakai virtual environment (venv) agar `pip` dan `python` selalu menunjuk ke interpreter yang sama. Semua dependensi ada di `requirements.txt`, dan paket `winrt-*` khusus Windows otomatis hanya terpasang di Windows.
+
+Linux / macOS:
+
 ```bash
-python3 -m venv venv && source venv/bin/activate     # Windows: venv\Scripts\activate
-pip install PySide6 pykakasi pypinyin korean-romanizer unidecode
-# Windows saja, tambahan:
-# pip install winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation \
-#             winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
 python3 senandung.py
 ```
+
+Windows (PowerShell):
+
+```powershell
+py -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python senandung.py
+```
+
+Jika PowerShell menolak menjalankan `Activate.ps1` ("running scripts is disabled"), jalankan sekali `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`, atau pakai `venv\Scripts\activate.bat` di CMD. Aktivasi hanya berlaku untuk jendela terminal itu; di terminal baru, aktifkan lagi, atau panggil langsung `venv\Scripts\python.exe senandung.py`.
+
+Jika muncul `No module named 'winrt'` atau `'pypinyin'`, paketnya terpasang di Python yang berbeda dari yang menjalankan aplikasi. Aktifkan venv lalu pasang dengan `python -m pip` (bukan `pip` saja).
 
 Linux juga perlu `playerctl` (mis. `sudo pacman -S playerctl` atau `sudo apt install playerctl`).
 

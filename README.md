@@ -116,14 +116,28 @@ Options: `-Autostart` (run at login), `-BuildExe` (build `Senandung.exe` with Py
 
 ### Manual (from source)
 
+Use a virtual environment (venv) so `pip` and `python` always point to the same interpreter. All dependencies are in `requirements.txt`, and the Windows-only `winrt-*` packages are installed automatically on Windows only.
+
+Linux / macOS:
+
 ```bash
-python3 -m venv venv && source venv/bin/activate     # Windows: venv\Scripts\activate
-pip install PySide6 pykakasi pypinyin korean-romanizer unidecode
-# Windows only, additionally:
-# pip install winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation \
-#             winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
 python3 senandung.py
 ```
+
+Windows (PowerShell):
+
+```powershell
+py -m venv venv
+venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python senandung.py
+```
+
+If PowerShell refuses to run `Activate.ps1` ("running scripts is disabled"), run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use `venv\Scripts\activate.bat` in CMD. The activation only lasts for that terminal window; in a new terminal, activate again, or run `venv\Scripts\python.exe senandung.py` directly.
+
+If you see `No module named 'winrt'` or `'pypinyin'`, the packages were installed into a different Python than the one running the app. Activate the venv and install with `python -m pip` (not a bare `pip`).
 
 Linux also needs `playerctl` (e.g. `sudo pacman -S playerctl` or `sudo apt install playerctl`).
 
