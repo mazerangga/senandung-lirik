@@ -11,3 +11,4 @@ dist/
 lyrics/
 installer-out/
 Senandung-Setup-*.exe
+venv*/
