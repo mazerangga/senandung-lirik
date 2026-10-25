@@ -714,6 +714,8 @@ class OSD(QWidget):
         self.idx = -1
         self.idx_changed = 0.0
         self.scroll = 0.0
+        self._sig = None                 # ringkasan tampilan terakhir yang digambar (lihat tick)
+        self._glyph_cache = {}           # bentuk huruf + garis tepi siap pakai (LRU, lihat _glyphs)
         self.track_key = ""
         self.last_key = ""
         self.note = ""
@@ -994,9 +996,29 @@ class OSD(QWidget):
                 self.idx, self.idx_changed = new, time.monotonic() * 1000
             target = max(self.idx, 0)
             d = target - self.scroll
-            self.scroll = target if abs(d) > 8 else self.scroll + d * 0.28
+            self.scroll = target if abs(d) > 8 or abs(d) < 0.002 else self.scroll + d * 0.28
+        # 33 ms saat ada yang bergerak (lagu main / scroll belum berhenti); 100 ms saat diam
+        busy = self.play_state == "Playing" or abs(max(self.idx, 0) - self.scroll) > 0.002
+        want = 33 if busy else 100
+        if self.tick_timer.interval() != want:
+            self.tick_timer.setInterval(want)
         if self.isVisible() and (self.lyrics or self.hover or self.toast or self.note):
-            self.update()
+            sig = self._frame_sig()
+            if sig != self._sig:                  # sama dengan frame yang sudah tergambar: lewati
+                self._sig = sig
+                self.update()
+
+    def _frame_sig(self):
+        """Ringkasan semua yang memengaruhi gambar. Sama dengan tick sebelumnya = tidak perlu
+        menggambar ulang (mis. lagu dijeda, atau baris aktif belum berganti)."""
+        wipe = 0
+        if self.lyrics and self.s["wipe"] and 0 <= self.idx < len(self.lyrics):
+            wipe = int(max(0.0, min(1.0, self._wipe(self.idx))) * 400)
+        ramp = min(12, int(max(0.0, time.monotonic() * 1000 - self.idx_changed) / 20))   # 240 ms
+        toast = self.toast if time.monotonic() < self.toast_until else ""
+        return (id(self.lyrics), self.idx, round(self.scroll, 3), wipe, ramp, self.play_state,
+                self.hover, self.hover_btn, self.locked, toast, self.note, bool(self.track_key),
+                self.width(), self.height())
 
     # ---- gambar teks
     def _font(self, scale=1.0):
@@ -1027,36 +1049,73 @@ class OSD(QWidget):
         g.setColorAt(1.0, color.darker(125))
         return QBrush(g)
 
+    def _glyphs(self, text, font, maxw):
+        """Bentuk huruf (QPainterPath) + metrik satu baris, muat otomatis ke lebar maxw.
+        Dihitung sekali per (teks, font, ukuran, lebar) lalu dipakai ulang tiap frame.
+        Cache LRU kecil: hasilnya memegang pixmap garis tepi."""
+        key = (text, self.s["font_family"], round(font.pointSizeF(), 2), round(maxw),
+               self.devicePixelRatioF())
+        g = self._glyph_cache.pop(key, None)         # pop + simpan lagi = tandai terbaru dipakai
+        if g is None:
+            fm = QFontMetricsF(font)
+            w = fm.horizontalAdvance(text)
+            if w > maxw:                             # kecilkan font agar muat
+                font.setPointSizeF(max(5.0, font.pointSizeF() * maxw / w))
+                fm = QFontMetricsF(font)
+                w = fm.horizontalAdvance(text)
+            path = QPainterPath()
+            path.addText(0, 0, font, text)           # titik asal = garis dasar, sisi kiri
+            g = {"path": path, "w": w, "asc": fm.ascent(), "desc": fm.descent(),
+                 "h": fm.height(), "size": font.pointSizeF(), "outline": None}
+            while len(self._glyph_cache) >= 48:
+                self._glyph_cache.pop(next(iter(self._glyph_cache)))
+        self._glyph_cache[key] = g
+        return g
+
+    def _outline(self, g):
+        """Garis tepi hitam dirender sekali ke pixmap. strokePath dengan antialiasing adalah
+        bagian paling mahal (puluhan kali lipat addText); menempel pixmap hampir gratis."""
+        if g["outline"] is None:
+            pw = max(2.0, g["size"] / 7)
+            pad = int(pw) + 3
+            base = int(g["asc"]) + 1 + pad                       # garis dasar di dalam pixmap
+            dpr = self.devicePixelRatioF()
+            wl, hl = int(g["w"]) + 2 * pad + 2, base + int(g["desc"]) + 1 + pad
+            pm = QPixmap(int(wl * dpr), int(hl * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.RenderHint.Antialiasing)
+            q.translate(pad, base)
+            q.strokePath(g["path"], QPen(QColor(0, 0, 0, 215), pw, Qt.PenStyle.SolidLine,
+                                         Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            q.end()
+            g["outline"] = (pm, pad, base)
+        return g["outline"]
+
     def _draw(self, p, text, yc, color, opa, align, wipe=0.0, scale=1.0):
         """Gambar satu baris (muat otomatis ke lebar jendela) berpusat vertikal di yc."""
         margin = 18
         maxw = self.width() - 2 * margin
-        font = self._font(scale)
-        fm = QFontMetricsF(font)
-        w = fm.horizontalAdvance(text)
-        if w > maxw:                                   # kecilkan font agar muat
-            font.setPointSizeF(max(5.0, font.pointSizeF() * maxw / w))
-            fm = QFontMetricsF(font)
-            w = fm.horizontalAdvance(text)
+        g = self._glyphs(text, self._font(scale), maxw)
+        w, asc, desc, fh = g["w"], g["asc"], g["desc"], g["h"]
         x = margin if align == "left" else self.width() - margin - w if align == "right" \
             else (self.width() - w) / 2
-        base = yc + (fm.ascent() - fm.descent()) / 2
-        top, bottom = base - fm.ascent(), base + fm.descent()
-        path = QPainterPath()
-        path.addText(x, base, font, text)
+        ox, oy = round(x), round(yc + (asc - desc) / 2)    # piksel bulat: pixmap tepi = isi, selalu pas
+        top, bottom = -asc, desc                 # relatif terhadap garis dasar (painter digeser)
         p.setOpacity(opa)
         if self.s["outline"]:
-            p.strokePath(path, QPen(QColor(0, 0, 0, 215), max(2.0, font.pointSizeF() / 7),
-                                    Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
-                                    Qt.PenJoinStyle.RoundJoin))
-        p.fillPath(path, self._brush(color, top, bottom))
+            pm, pad, by = self._outline(g)
+            p.drawPixmap(ox - pad, oy - by, pm)
+        p.save()
+        p.translate(ox, oy)
+        p.fillPath(g["path"], self._brush(color, top, bottom))
         if wipe > 0:
-            p.save()
-            p.setClipRect(QRectF(x - 2, top - 4, w * min(wipe, 1.0) + 2, fm.height() + 8))
-            p.fillPath(path, self._brush(self._kara(), top, bottom))
-            p.restore()
+            p.setClipRect(QRectF(-2, top - 4, w * min(wipe, 1.0) + 2, fh + 8))
+            p.fillPath(g["path"], self._brush(self._kara(), top, bottom))
+        p.restore()
         p.setOpacity(1.0)
-        return fm.height()
+        return fh
 
     def _row_h(self):
         h = QFontMetricsF(self._font()).height() * 1.32 * self._spacing()
