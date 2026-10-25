@@ -26,7 +26,7 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
 - **Deteksi pemutar otomatis**, dengan prioritas dan blacklist yang bisa diatur.
 - **Unduh lirik otomatis** dari [LRCLIB](https://lrclib.net), disimpan sebagai `.lrc` di folder lokal sehingga lagu berikutnya langsung muncul tanpa internet.
 - **Cari lirik online…** dan **Buka file lirik (.lrc)…** dari menu klik kanan, untuk lagu yang liriknya tidak ketemu otomatis atau salah. File `.lrc` yang dipilih otomatis disalin dengan nama sesuai lagu.
-- **Romanisasi** lirik Jepang (romaji), Mandarin (pinyin), Korea, dan aksara non-Latin lain: hanya romaji, atau teks asli + romaji.
+- **Romanisasi** lirik Jepang (romaji), Mandarin (pinyin), Korea, dan aksara non-Latin lain seperti Cyrillic, Yunani, Ibrani, dan Thai: hanya romaji, atau teks asli + romaji. Arab, Persia, dan Urdu sengaja ditampilkan dengan aksara aslinya (lihat [Romanisasi](#romanisasi)).
 - **Tampilan bisa diatur**: font, ukuran, warna teks dan highlight, outline, teks gradien, perataan (kiri/tengah/kanan/zigzag), selalu di atas, mode kunci (klik tembus).
 - **Geser waktu** (offset) bila lirik terlalu cepat atau lambat.
 - **Antarmuka bahasa Indonesia dan Inggris**: mengikuti bahasa sistem secara bawaan, bisa diganti di Pengaturan.
@@ -37,10 +37,12 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
 | Bagian | Bahasa / teknologi |
 | --- | --- |
 | Aplikasi utama (`senandung.py`) | **Python 3.10+**, antarmuka **PySide6 (Qt 6)** |
+| Backend pemutar (`players/`) | Paket Python, satu modul per platform: `linux.py`, `windows.py`, `aimp.py` |
 | Baca pemutar di Linux | **playerctl** (MPRIS) |
 | Baca pemutar di Windows | **Windows Media Session** lewat paket `winrt-*` (plus AIMP Remote API) |
 | Sumber lirik | API **LRCLIB** (HTTP + JSON, lewat `urllib` bawaan Python) |
-| Romanisasi (opsional) | `pykakasi`, `pypinyin`, `korean-romanizer`, `unidecode` |
+| Romanisasi (`romanize/`) | Paket Python, satu modul per bahasa |
+| Pustaka romanisasi (opsional) | `pykakasi`, `pypinyin`, `korean-romanizer`, `unidecode` |
 | Installer Linux | **Bash** (`install-senandung.sh`) |
 | Installer Windows | **PowerShell** (`install-senandung.ps1`) dan **Inno Setup** (`senandung.iss`, menghasilkan Setup `.exe` beserta uninstaller) |
 | Build `.exe` Windows | **PyInstaller** (`--onefile`) |
@@ -125,6 +127,8 @@ python3 senandung.py
 
 Linux juga perlu `playerctl` (mis. `sudo pacman -S playerctl` atau `sudo apt install playerctl`).
 
+Jalankan dari folder repo: `senandung.py` membutuhkan folder `romanize/` dan `players/` di sebelahnya, jadi menyalin `senandung.py` saja ke tempat lain tidak akan berfungsi.
+
 ## Cara pakai
 
 Jalankan pemutar musik (Spotify, AIMP, foobar2000, MusicBee, VLC, dan sebagainya), lalu jalankan Senandung. Lirik muncul begitu lagu diputar.
@@ -151,12 +155,35 @@ Buka lewat menu klik kanan, **Pengaturan…**. Beberapa yang paling sering dipak
 
 - **Bahasa**: Otomatis, Bahasa Indonesia, atau English.
 - **Pemutar prioritas** dan **blacklist**: urutan dan daftar pemutar (dipisah koma). Secara bawaan browser diabaikan agar video tidak dianggap lagu.
-- **Folder lirik**: bawaan `~/lyrics`. Berkas bernama `Artis - Judul.lrc`, dan `Artis - Judul.romaji.lrc` untuk romanisasi.
+- **Folder lirik**: bawaan `~/lyrics`. Berkas bernama `Artis - Judul.lrc`, dan `Artis - Judul.romaji.v4.lrc` untuk romanisasi yang tersimpan (angka `v4` berubah saat aturan romanisasi berubah; lihat [Romanisasi](#romanisasi)).
 - **Simpan lirik sebagai `.lrc`**: matikan jika tidak ingin menyimpan apa pun ke disk.
 - **Romanisasi**: `off`, `romaji`, atau `both`.
 - **Geser waktu**: bawaan 500 ms.
 
 Kamu juga bisa menaruh `.lrc` buatan sendiri di folder lirik; berkas lokal selalu dipakai lebih dulu sebelum mencari online.
+
+## Romanisasi
+
+Atur **Romanisasi** di Pengaturan ke `romaji` (hanya romaji) atau `both` (teks asli + romaji). Fitur ini opsional: bila pustaka di bawah belum terpasang, barisnya ditampilkan apa adanya.
+
+| Aksara | Modul | Pustaka |
+| --- | --- | --- |
+| Jepang (kana, dan kanji pada lagu yang berisi kana) | `romanize/japanese.py` | `pykakasi` |
+| Mandarin | `romanize/chinese.py` | `pypinyin` |
+| Korea | `romanize/korean.py` | `korean-romanizer` |
+| Aksara lain (Cyrillic, Yunani, Ibrani, Thai, Devanagari, ...) | `romanize/generic.py` | `unidecode` |
+
+**Arab, Persia, dan Urdu tidak diromanisasi, dan itu disengaja.** Teks Arab sehari-hari tidak menuliskan vokal pendek, sehingga program hanya bisa menebaknya dan tebakannya sering salah. Barisnya ditampilkan dengan aksara aslinya.
+
+**Romanisasi yang tersimpan.** Romanisasi sebuah lagu disimpan di samping liriknya sebagai `Artis - Judul.romaji.v<N>.lrc`. `<N>` adalah `ROMAN_VERSION` di `romanize/__init__.py`. Bila keluaran sebuah romanizer berubah, naikkan angka itu agar berkas lama tidak dipakai lagi. Berkas dari versi sebelumnya (`*.romaji.lrc`) tidak dibaca lagi dan boleh dihapus.
+
+**Menambah aksara atau bahasa.**
+
+1. Tambahkan pola deteksi di `romanize/scripts.py`.
+2. Buat `romanize/<bahasa>.py` berisi fungsi yang menerima teks dan mengembalikan teks romanisasinya. Muat pustaka opsional lewat `lazy()` dari `romanize/common.py`, supaya pustaka yang belum terpasang tidak membuat aplikasi crash.
+3. Daftarkan di `romanize_lines()` pada `romanize/__init__.py`.
+4. Naikkan `ROMAN_VERSION`.
+5. Bila butuh pustaka baru, tambahkan ke baris `pip install` dan `--hidden-import` di `.github/workflows/release.yml` (serta ke opsi PyInstaller di `install-senandung.ps1`).
 
 ## Merilis versi baru (untuk maintainer)
 
@@ -182,12 +209,28 @@ Catatan:
   Bila rilis dengan tag itu sudah terlanjur ada di halaman Releases, hapus dulu rilisnya.
 - Perbarui nomor versi di `$Version` pada `packaging/windows/install-senandung.ps1` dan bawaan `AppVersion` di `senandung.iss` agar sama dengan tag.
 - Cek build installer secara lokal sebelum tag: `python3 tools/build_installers.py`.
+- Commit dan push **semua** folder baru (`romanize/`, `players/`) sebelum membuat tag; tag pada commit yang belum memuatnya menghasilkan aplikasi yang tidak bisa jalan.
+- Folder paket Python baru di samping `senandung.py` harus didaftarkan di dua tempat, kalau tidak aplikasi hasil install gagal dengan `ModuleNotFoundError`: `APP_PACKAGES` di `tools/build_installers.py`, dan baris `for pkg in ...` di `packaging/linux/install-senandung.sh`. Installer `.ps1` dan PyInstaller mengambil paket dengan sendirinya.
 
 ## Struktur repo
 
 ```
 senandung-lirik/
-├── senandung.py                   # aplikasi utama
+├── senandung.py                   # aplikasi: antarmuka, pengaturan, pemuatan lirik, main
+├── romanize/                      # romanisasi, satu modul per bahasa
+│   ├── __init__.py                # romanize_lines() + ROMAN_VERSION (versi cache)
+│   ├── scripts.py                 # deteksi aksara (kana, han, hangul, arab, ...)
+│   ├── common.py                  # fungsi bersama (tidy, muat pustaka sesuai kebutuhan)
+│   ├── japanese.py                # Jepang    -> romaji  (pykakasi)
+│   ├── chinese.py                 # Mandarin  -> pinyin  (pypinyin)
+│   ├── korean.py                  # Korea     -> romanisasi (korean-romanizer)
+│   └── generic.py                 # aksara lain (unidecode)
+├── players/                       # backend pemutar
+│   ├── __init__.py                # make_backend(): memilih backend sesuai OS
+│   ├── common.py                  # penanda platform, urutan prioritas / blacklist
+│   ├── linux.py                   # playerctl + D-Bus (MPRIS)
+│   ├── windows.py                 # Windows Media Session (SMTC)
+│   └── aimp.py                    # AIMP Remote API
 ├── .github/workflows/release.yml  # rilis otomatis saat tag v* di-push
 ├── .gitattributes                 # menyeragamkan ujung baris (LF/CRLF)
 ├── assets/icons/
@@ -228,6 +271,9 @@ Setelah ikon atau kode berubah, jalankan `python3 tools/build_installers.py` sup
 - **Jendela tidak bisa selalu di atas / posisi tidak diingat** (Wayland): jalankan dengan `--x11`.
 - **Ikon tray tidak muncul di GNOME**: GNOME butuh ekstensi AppIndicator agar ikon tray tampil.
 - **Lirik tidak muncul**: cek `--list-players` apakah pemutar terdeteksi dan tidak masuk blacklist. Lagu yang tidak ada di LRCLIB tidak akan punya lirik; kamu bisa menyediakan `.lrc` sendiri.
+- **`ModuleNotFoundError: No module named 'romanize'` (atau `players`)**: folder itu harus berada di samping `senandung.py`. Saat menjalankan dari source, mulai dari folder repo dan jangan menyalin `senandung.py` saja.
+- **Baris Arab tidak ada romanisasinya**: itu disengaja (lihat [Romanisasi](#romanisasi)).
+- **Romanisasi terlihat usang atau salah**: hapus berkas `*.romaji.v*.lrc` lagu itu di folder lirik; berkas dibuat ulang saat lagu diputar berikutnya.
 - **Log di Windows** (saat jalan tanpa konsol): `%LOCALAPPDATA%\senandung.log`.
 - **SmartScreen memperingatkan saat membuka Setup `.exe`** (Windows): berkas belum ditandatangani. Klik **More info**, lalu **Run anyway**.
 - **"running scripts is disabled on this system"** (Windows): jalankan `.ps1` dengan `powershell -ExecutionPolicy Bypass -File ...`.
@@ -243,4 +289,4 @@ Setelah ikon atau kode berubah, jalankan `python3 tools/build_installers.py` sup
 
 ## Kontribusi
 
-Issue dan pull request dipersilakan. Sertakan OS, versi Python, nama pemutar, dan keluaran `--list-players` saat melaporkan masalah.
+Issue dan pull request dipersilakan. Sebagian besar perubahan bersifat lokal: romanisasi ada di `romanize/`, backend pemutar di `players/` (lihat *Struktur repo*). Sertakan OS, versi Python, nama pemutar, dan keluaran `--list-players` saat melaporkan masalah.

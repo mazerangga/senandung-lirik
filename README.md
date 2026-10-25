@@ -26,7 +26,7 @@ It works with the players you already use (Spotify, AIMP, foobar2000, MusicBee, 
 - **Automatic player detection**, with configurable priority and blacklist.
 - **Automatic lyrics download** from [LRCLIB](https://lrclib.net), saved as `.lrc` in a local folder so the next play works offline.
 - **Search lyrics online…** and **Open lyrics file (.lrc)…** in the right-click menu, for songs whose lyrics were not found or are wrong. A chosen `.lrc` file is copied and renamed to match the song automatically.
-- **Romanization** of Japanese (romaji), Chinese (pinyin), Korean and other non-Latin scripts: romanization only, or original text + romanization.
+- **Romanization** of Japanese (romaji), Chinese (pinyin), Korean and other non-Latin scripts such as Cyrillic, Greek, Hebrew and Thai: romanization only, or original text + romanization. Arabic, Persian and Urdu are shown in their original script on purpose (see [Romanization](#romanization)).
 - **Fully customizable look**: font, size, text and highlight colors, outline, gradient text, alignment (left / center / right / zigzag), always on top, lock mode (click-through).
 - **Time offset** when lyrics run too early or too late.
 - **English and Indonesian interface**: follows your system language by default, switchable in Settings.
@@ -37,10 +37,12 @@ It works with the players you already use (Spotify, AIMP, foobar2000, MusicBee, 
 | Part | Language / technology |
 | --- | --- |
 | Main app (`senandung.py`) | **Python 3.10+**, UI with **PySide6 (Qt 6)** |
+| Player backends (`players/`) | Python package, one module per platform: `linux.py`, `windows.py`, `aimp.py` |
 | Reading the player on Linux | **playerctl** (MPRIS) |
 | Reading the player on Windows | **Windows Media Session** via `winrt-*` packages (plus the AIMP Remote API) |
 | Lyrics source | **LRCLIB** API (HTTP + JSON, using Python's built-in `urllib`) |
-| Romanization (optional) | `pykakasi`, `pypinyin`, `korean-romanizer`, `unidecode` |
+| Romanization (`romanize/`) | Python package, one module per language |
+| Romanization libraries (optional) | `pykakasi`, `pypinyin`, `korean-romanizer`, `unidecode` |
 | Linux installer | **Bash** (`install-senandung.sh`) |
 | Windows installer | **PowerShell** (`install-senandung.ps1`) and **Inno Setup** (`senandung.iss`, produces the Setup `.exe` with its uninstaller) |
 | Windows `.exe` build | **PyInstaller** (`--onefile`) |
@@ -125,6 +127,8 @@ python3 senandung.py
 
 Linux also needs `playerctl` (e.g. `sudo pacman -S playerctl` or `sudo apt install playerctl`).
 
+Run it from the repository folder: `senandung.py` needs the `romanize/` and `players/` folders next to it, so copying `senandung.py` alone to another place will not work.
+
 ## Usage
 
 Start your music player (Spotify, AIMP, foobar2000, MusicBee, VLC, and so on), then start Senandung. Lyrics appear as soon as a song plays.
@@ -151,12 +155,35 @@ Open them from the right-click menu, **Settings…**. The most useful ones:
 
 - **Language**: Automatic, Bahasa Indonesia or English.
 - **Priority players** and **blacklist**: order and list of players (comma separated). Browsers are ignored by default so videos are not mistaken for songs.
-- **Lyrics folder**: defaults to `~/lyrics`. Files are named `Artist - Title.lrc`, and `Artist - Title.romaji.lrc` for romanization.
+- **Lyrics folder**: defaults to `~/lyrics`. Files are named `Artist - Title.lrc`, and `Artist - Title.romaji.v4.lrc` for the saved romanization (the `v4` changes when the romanization rules change; see [Romanization](#romanization)).
 - **Save lyrics as `.lrc`**: turn off if you do not want anything written to disk.
 - **Romanization**: `off`, `romaji` or `both`.
 - **Time offset**: 500 ms by default.
 
 You can also drop your own `.lrc` files into the lyrics folder; local files are always used before searching online.
+
+## Romanization
+
+Set **Romanization** in Settings to `romaji` (romanization only) or `both` (original text + romanization). It is optional: if a library below is not installed, those lines are simply shown as they are.
+
+| Script | Module | Library |
+| --- | --- | --- |
+| Japanese (kana, and kanji in songs that contain kana) | `romanize/japanese.py` | `pykakasi` |
+| Chinese | `romanize/chinese.py` | `pypinyin` |
+| Korean | `romanize/korean.py` | `korean-romanizer` |
+| Other scripts (Cyrillic, Greek, Hebrew, Thai, Devanagari, ...) | `romanize/generic.py` | `unidecode` |
+
+**Arabic, Persian and Urdu are not romanized, on purpose.** Everyday Arabic text leaves out the short vowels, so a program can only guess them and the guesses are often wrong. Those lines are shown in their original script instead.
+
+**Saved romanization.** The romanization of a song is saved next to its lyrics as `Artist - Title.romaji.v<N>.lrc`. `<N>` is `ROMAN_VERSION` in `romanize/__init__.py`. When the output of a romanizer changes, raise that number so old saved files are not reused. Files from earlier versions (`*.romaji.lrc`) are no longer read and can be deleted.
+
+**Adding a script or language.**
+
+1. Add a detection pattern to `romanize/scripts.py`.
+2. Create `romanize/<language>.py` with a function that takes a text and returns the romanized text. Load optional libraries with `lazy()` from `romanize/common.py`, so a missing library does not crash the app.
+3. Register it in `romanize_lines()` in `romanize/__init__.py`.
+4. Raise `ROMAN_VERSION`.
+5. If it needs a new library, add it to the `pip install` and `--hidden-import` lines in `.github/workflows/release.yml` (and to the PyInstaller options in `install-senandung.ps1`).
 
 ## Publishing a new release (for maintainers)
 
@@ -182,12 +209,28 @@ Notes:
   If a release for that tag already exists on the Releases page, delete it first.
 - Update the version in `$Version` in `packaging/windows/install-senandung.ps1` and the default `AppVersion` in `senandung.iss` so they match the tag.
 - Check the installer build locally before tagging: `python3 tools/build_installers.py`.
+- Commit and push **all** new folders (`romanize/`, `players/`) before tagging; a tag on a commit without them builds an app that cannot start.
+- A new Python package folder next to `senandung.py` must be listed in two places, otherwise the installed app fails with `ModuleNotFoundError`: `APP_PACKAGES` in `tools/build_installers.py`, and the `for pkg in ...` lines in `packaging/linux/install-senandung.sh`. The `.ps1` installer and PyInstaller pick packages up on their own.
 
 ## Repository layout
 
 ```
 senandung-lirik/
-├── senandung.py                   # the app
+├── senandung.py                   # the app: interface, settings, lyrics loading, main
+├── romanize/                      # romanization, one module per language
+│   ├── __init__.py                # romanize_lines() + ROMAN_VERSION (cache version)
+│   ├── scripts.py                 # script detection (kana, han, hangul, arabic, ...)
+│   ├── common.py                  # shared helpers (tidy, lazy loading of libraries)
+│   ├── japanese.py                # Japanese  -> romaji  (pykakasi)
+│   ├── chinese.py                 # Chinese   -> pinyin  (pypinyin)
+│   ├── korean.py                  # Korean    -> romanization (korean-romanizer)
+│   └── generic.py                 # other scripts (unidecode)
+├── players/                       # player backends
+│   ├── __init__.py                # make_backend(): picks the backend for your OS
+│   ├── common.py                  # platform flags, priority / blacklist ranking
+│   ├── linux.py                   # playerctl + D-Bus (MPRIS)
+│   ├── windows.py                 # Windows Media Session (SMTC)
+│   └── aimp.py                    # AIMP Remote API
 ├── .github/workflows/release.yml  # automated release when a v* tag is pushed
 ├── .gitattributes                 # keeps line endings consistent (LF/CRLF)
 ├── assets/icons/
@@ -228,6 +271,9 @@ After the icons or the code change, run `python3 tools/build_installers.py` so t
 - **Window cannot stay on top / position is not remembered** (Wayland): run with `--x11`.
 - **No tray icon on GNOME**: GNOME needs the AppIndicator extension to show tray icons.
 - **Lyrics do not appear**: run `--list-players` to check that your player is detected and not blacklisted. Songs that are not on LRCLIB will not have lyrics; you can provide your own `.lrc`.
+- **`ModuleNotFoundError: No module named 'romanize'` (or `players`)**: those folders must sit next to `senandung.py`. When running from source, start it from the repository folder and do not copy `senandung.py` alone.
+- **Arabic lines have no romanization**: this is intentional (see [Romanization](#romanization)).
+- **Romanization looks outdated or wrong**: delete the `*.romaji.v*.lrc` file of that song in the lyrics folder; it is created again on the next play.
 - **Log on Windows** (when running without a console): `%LOCALAPPDATA%\senandung.log`.
 - **SmartScreen warns when opening the Setup `.exe`** (Windows): the file is not signed. Click **More info**, then **Run anyway**.
 - **"running scripts is disabled on this system"** (Windows): run the `.ps1` with `powershell -ExecutionPolicy Bypass -File ...`.
@@ -243,4 +289,4 @@ After the icons or the code change, run `python3 tools/build_installers.py` so t
 
 ## Contributing
 
-Issues and pull requests are welcome. When reporting a problem, please include your OS, Python version, player name and the output of `--list-players`.
+Issues and pull requests are welcome. Most changes are local: romanization lives in `romanize/`, player backends in `players/` (see *Repository layout*). When reporting a problem, please include your OS, Python version, player name and the output of `--list-players`.
