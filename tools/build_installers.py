@@ -33,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 APP = "senandung"
 SCRIPT = ROOT / "senandung.py"
+APP_PACKAGES = ("romanize", "players")      # paket Python di samping senandung.py
 ICONS = ROOT / "assets" / "icons"
 SH_TEMPLATE = ROOT / "packaging" / "linux" / "install-senandung.sh"
 PS1_TEMPLATE = ROOT / "packaging" / "windows" / "install-senandung.ps1"
@@ -52,6 +53,9 @@ def say(msg):
 def payload_files(with_ico):
     """Daftar (nama di arsip, isi). Urutan tetap supaya hasil deterministik."""
     items = [("senandung.py", SCRIPT.read_bytes())]
+    # modul aplikasi ikut dibawa; urutan nama tetap supaya hasil deterministik
+    for pkg in APP_PACKAGES:
+        items += [(f"{pkg}/{p.name}", p.read_bytes()) for p in sorted((ROOT / pkg).glob("*.py"))]
     wanted = [f"assets/icons/png/{APP}-{n}.png" for n in PNG_SIZES]
     wanted += [f"assets/icons/tray/{APP}-tray-{n}.png" for n in TRAY_SIZES]
     if with_ico:

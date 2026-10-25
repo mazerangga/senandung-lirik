@@ -29,17 +29,15 @@ import math
 import os
 import re
 import shutil
-import struct
 import sys
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 
-from PySide6.QtCore import (QLocale, QObject, QPointF, QProcess, QRectF, QSettings, Qt,
-                            QTimer, Signal, Slot)
+from PySide6.QtCore import QLocale, QObject, QPointF, QRectF, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -278,82 +276,12 @@ def lrc_name(artist, title):
     return n + ".lrc"
 
 
-NON_LATIN = re.compile(
-    "[\u0370-\u052f\u0590-\u06ff\u0900-\u0eff\u1100-\u11ff\u3040-\u30ff\u3130-\u318f"
-    "\u3400-\u9fff\uac00-\ud7af]")
-KANA = re.compile("[\u3040-\u30ff\u31f0-\u31ff]")
-HAN = re.compile("[\u3400-\u4dbf\u4e00-\u9fff]")
-HANGUL = re.compile("[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")
-OTHER = re.compile("[\u0370-\u03ff\u0400-\u052f\u0590-\u06ff\u0900-\u0dff\u0e00-\u0eff]")
-PUNCT = str.maketrans({"，": ",", "。": ".", "、": ",", "！": "!", "？": "?", "：": ":", "；": ";",
-                       "（": "(", "）": ")", "　": " "})
-_libs = {}
+from romanize import NON_LATIN, ROMAN_VERSION, romanize_lines  # noqa: E402  (paket romanize/)
 
 
-def _lib(name):
-    if name not in _libs:
-        try:
-            if name == "kakasi":
-                import pykakasi
-                _libs[name] = pykakasi.kakasi()
-            elif name == "pinyin":
-                from pypinyin import Style, lazy_pinyin
-                _libs[name] = (lazy_pinyin, Style)
-            elif name == "korean":
-                from korean_romanizer.romanizer import Romanizer
-                _libs[name] = Romanizer
-            else:
-                from unidecode import unidecode
-                _libs[name] = unidecode
-        except Exception as e:
-            print(f"[senandung] romanization module '{name}' not available: {e}", file=sys.stderr)
-            _libs[name] = None
-    return _libs[name]
-
-
-def _tidy(s):
-    s = re.sub(r"\s+", " ", s.translate(PUNCT)).strip()
-    s = re.sub(r"\s+([,.!?;:)\]」』”’])", r"\1", s)
-    return s[:1].upper() + s[1:] if s else s
-
-
-def romanize_lines(lines):
-    song_ja = any(KANA.search(x) for x in lines)
-
-    def ja(t):
-        k = _lib("kakasi")
-        return _tidy(" ".join(i["hepburn"] for i in k.convert(t))) if k else ""
-
-    def zh(t):
-        p = _lib("pinyin")
-        return _tidy(" ".join(p[0](t, style=p[1].TONE))) if p else ""
-
-    def other(t):
-        u = _lib("unidecode")
-        return _tidy(u(t)) if u else ""
-
-    def ko(t):
-        r = _lib("korean")
-        if r:
-            try:
-                return _tidy(r(t).romanize())
-            except Exception:
-                pass
-        return other(t)
-
-    out = []
-    for t in lines:
-        if KANA.search(t):
-            out.append(ja(t))
-        elif HAN.search(t):
-            out.append(ja(t) if song_ja else zh(t))
-        elif HANGUL.search(t):
-            out.append(ko(t))
-        elif OTHER.search(t):
-            out.append(other(t))
-        else:
-            out.append("")
-    return out
+def romaji_name(lrc_filename):
+    """Nama file cache romanisasi; memuat ROMAN_VERSION supaya cache lama otomatis tidak dipakai."""
+    return lrc_filename.replace(".lrc", f".romaji.v{ROMAN_VERSION}.lrc")
 
 
 def http_json(url):
@@ -445,7 +373,6 @@ def load_lyrics(artist, title, duration_s, cfg):
 
     # 4. Cari tag offset dari teks mentah (lokal maupun online)
     if raw_text:
-        import re
         offset_match = re.search(r'\[offset:([+-]?\d+)\]', raw_text, re.IGNORECASE)
         offset_val = int(offset_match.group(1)) if offset_match else 0
 
@@ -457,7 +384,7 @@ def load_lyrics(artist, title, duration_s, cfg):
 
     # --- Sisa kode romaji di bawah ini tidak berubah ---
     if entries and cfg["romaji"] != "off" and any(NON_LATIN.search(e["text"]) for e in entries):
-        rfile = folder / name.replace(".lrc", ".romaji.lrc")
+        rfile = folder / romaji_name(name)
         done = False
         if cfg["save_local"] and rfile.exists():
             rl = parse_lrc(rfile.read_text("utf-8", errors="replace"))
@@ -494,476 +421,9 @@ class Loader(QObject):
         threading.Thread(target=run, daemon=True).start()
 
 
-# --------------------------------------------------------------------- pemutar (backend)
-IS_WIN = sys.platform == "win32"
-IS_LINUX = sys.platform.startswith("linux")
-
-
-def split_list(text):
-    return [x.strip().lower() for x in str(text).split(",") if x.strip()]
-
-
-def short_name(name):
-    """Nama pemutar yang stabil: buang akhiran instance MPRIS (firefox.instance123 -> firefox)."""
-    return re.sub(r"\.instance[\d_]+$", "", name.strip().lower())
-
-
-def rank_player(name, prefer, black, strict):
-    """None = pemutar ditolak; selain itu peringkat (makin kecil makin diutamakan).
-    Cocok bila nama pemutar MENGANDUNG kata di daftar (huruf besar/kecil tidak berpengaruh)."""
-    n = name.lower()
-    if any(b in n for b in black):
-        return None
-    for i, a in enumerate(prefer):
-        if a in n:
-            return i
-    return None if strict else len(prefer)
-
-
-class LinuxBackend(QObject):
-    """Membaca pemutar lewat playerctl (MPRIS)."""
-    updated = Signal(object)          # dict info pemutar, atau None bila tidak ada pemutar
-    FMT = "{{playerName}}|||{{status}}|||{{position}}|||{{mpris:length}}|||{{artist}}|||{{title}}"
-
-    def __init__(self, get_filter):
-        super().__init__()
-        self.get_filter = get_filter
-        self.player = None
-        self.proc = QProcess(self)
-        self.proc.finished.connect(self._done)
-        self.timer = QTimer(self, interval=300, timeout=self._poll)
-
-    def start(self):
-        self.timer.start()
-
-    def stop(self):
-        self.timer.stop()
-
-    def _poll(self):
-        if self.proc.state() == QProcess.ProcessState.NotRunning:
-            self.proc.start("playerctl", ["-a", "metadata", "--format", self.FMT])
-
-    def _done(self):
-        out = bytes(self.proc.readAllStandardOutput()).decode("utf-8", "replace")
-        prefer, black, strict = self.get_filter()
-        best, best_score = None, -1e9
-        for line in out.splitlines():
-            p = line.split("|||")
-            if len(p) < 6:
-                continue
-            rank = rank_player(p[0], prefer, black, strict)
-            if rank is None:
-                continue
-            score = (1000 if p[1] == "Playing" else 500 if p[1] == "Paused" else 0) - rank
-            if score > best_score:
-                best, best_score = p, score
-        if best is None:
-            self.player = None
-            self.updated.emit(None)
-            return
-        name, state, pos, length, artist, title = best
-        self.player = name
-        clock = True
-        try:
-            pos_ms = int(pos) / 1000
-        except ValueError:
-            pos_ms, clock = 0.0, False         # pemutar tidak melaporkan posisi
-        try:
-            dur = round(int(length) / 1_000_000)
-        except ValueError:
-            dur = 0
-        self.updated.emit({"state": state, "pos": pos_ms, "length": dur, "clock": clock,
-                           "artist": artist, "title": title, "player": name})
-
-    def command(self, cmd):                    # previous | play-pause | next
-        if self.player:
-            QProcess.startDetached("playerctl", ["-p", self.player, cmd])
-
-class LinuxDBusBackend(QObject):
-    """Membaca pemutar lewat D-Bus asinkron (MPRIS) dengan kompensasi latensi."""
-    updated = Signal(object)
-
-    def __init__(self, get_filter):
-        super().__init__()
-        from PySide6.QtDBus import QDBusConnection, QDBusServiceWatcher
-        self.get_filter = get_filter
-        self.player = None
-        self.cache = {}
-        self.bus = QDBusConnection.sessionBus()
-        self._watchers = []
-
-        self.watcher = QDBusServiceWatcher(self)
-        self.watcher.setConnection(self.bus)
-        self.watcher.setWatchMode(QDBusServiceWatcher.WatchModeFlag.WatchForOwnerChange)
-        self.watcher.serviceOwnerChanged.connect(self._on_name_owner)
-
-        self.bus.connect("", "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "PropertiesChanged", self._on_prop_changed)
-        self.bus.connect("", "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player", "Seeked", self._on_seeked)
-
-        self.timer = QTimer(self, interval=250, timeout=self._emit_updated)
-        self.sync_timer = QTimer(self, interval=5000, timeout=self._sync_all)
-
-    def start(self):
-        self._full_scan()
-        self.timer.start()
-        self.sync_timer.start()
-
-    def stop(self):
-        self.timer.stop()
-        self.sync_timer.stop()
-
-    def command(self, cmd):
-        if self.player:
-            from PySide6.QtDBus import QDBusMessage
-            msg = QDBusMessage.createMethodCall(
-                f"org.mpris.MediaPlayer2.{self.player}",
-                "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player", cmd)
-            self.bus.asyncCall(msg)
-
-    def _full_scan(self):
-        from PySide6.QtDBus import QDBusMessage
-        msg = QDBusMessage.createMethodCall("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "ListNames")
-        reply = self.bus.call(msg)
-        if reply.type() == QDBusMessage.MessageType.ReplyMessage:
-            for name in reply.arguments()[0]:
-                if name.startswith("org.mpris.MediaPlayer2."):
-                    self._init_player(name)
-
-    def _init_player(self, bus_name):
-        if bus_name not in self.cache:
-            self.cache[bus_name] = {"state": "Stopped", "pos": 0.0, "length": 0, "clock": False, "artist": "", "title": "", "stamp": 0.0}
-        self._fetch_prop(bus_name, "PlaybackStatus")
-        self._fetch_prop(bus_name, "Metadata")
-        self._fetch_prop(bus_name, "Position")
-
-    def _fetch_prop(self, bus_name, prop):
-        from PySide6.QtDBus import QDBusMessage, QDBusPendingCallWatcher
-        msg = QDBusMessage.createMethodCall(bus_name, "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get")
-        msg.setArguments(["org.mpris.MediaPlayer2.Player", prop])
-        w = QDBusPendingCallWatcher(self.bus.asyncCall(msg), self)
-        w.setProperty("bus_name", bus_name)
-        w.setProperty("prop", prop)
-        w.setProperty("start_time", time.monotonic())
-        w.finished.connect(self._on_async_prop)
-        self._watchers.append(w)
-
-    def _sync_all(self):
-        for bus_name in list(self.cache.keys()):
-            self._fetch_prop(bus_name, "Position")
-
-    @Slot(object)
-    def _on_prop_changed(self, msg):
-        bus_name = msg.service()
-        if not bus_name.startswith("org.mpris.MediaPlayer2."): return
-        args = msg.arguments()
-        if len(args) < 2: return
-        
-        if bus_name not in self.cache:
-            self._init_player(bus_name)
-        props = args[1]
-        
-        if "PlaybackStatus" in props:
-            self.cache[bus_name]["state"] = props["PlaybackStatus"]
-            self._fetch_prop(bus_name, "Position")
-        if "Metadata" in props:
-            self._parse_meta(self.cache[bus_name], props["Metadata"])
-            self._fetch_prop(bus_name, "Position")
-
-    @Slot(object)
-    def _on_seeked(self, msg):
-        bus_name = msg.service()
-        if bus_name.startswith("org.mpris.MediaPlayer2."):
-            self._fetch_prop(bus_name, "Position")
-
-    @Slot(object)
-    def _on_name_owner(self, name, old, new):
-        if name.startswith("org.mpris.MediaPlayer2."):
-            if new:
-                self._init_player(name)
-            elif old and name in self.cache:
-                del self.cache[name]
-
-    @Slot(object)
-    def _on_async_prop(self, watcher):
-        self._watchers.remove(watcher)
-        watcher.deleteLater()
-        from PySide6.QtDBus import QDBusMessage
-        reply = watcher.reply()
-        bus_name = watcher.property("bus_name")
-        prop = watcher.property("prop")
-        
-        if bus_name not in self.cache or reply.type() == QDBusMessage.MessageType.ErrorMessage:
-            if prop == "Position" and bus_name in self.cache:
-                self.cache[bus_name]["clock"] = False
-            return
-            
-        c = self.cache[bus_name]
-        val = reply.arguments()[0]
-        
-        if prop == "PlaybackStatus":
-            c["state"] = val
-        elif prop == "Metadata":
-            self._parse_meta(c, val)
-        elif prop == "Position":
-            rtt = time.monotonic() - watcher.property("start_time")
-            c["pos"] = (val / 1000.0) + ((rtt / 2.0) * 1000.0)
-            c["stamp"] = time.monotonic()
-            c["clock"] = True
-
-    def _parse_meta(self, c, meta):
-        c["title"] = str(meta.get("xesam:title", ""))
-        artists = meta.get("xesam:artist", [])
-        c["artist"] = ", ".join(artists) if isinstance(artists, list) else str(artists)
-        c["length"] = round(int(meta.get("mpris:length", 0)) / 1000000.0)
-
-    def _emit_updated(self):
-        prefer, black, strict = self.get_filter()
-        best, best_score = None, -1e9
-        
-        for bus_name, c in self.cache.items():
-            name = bus_name.replace("org.mpris.MediaPlayer2.", "")
-            rank = rank_player(name, prefer, black, strict)
-            if rank is None: continue
-            
-            score = (1000 if c["state"] == "Playing" else 500 if c["state"] == "Paused" else 0) - rank
-            if score > best_score:
-                best, best_score = bus_name, score
-                
-        if not best:
-            self.player = None
-            self.updated.emit(None)
-            return
-            
-        c = self.cache[best]
-        self.player = best.replace("org.mpris.MediaPlayer2.", "")
-        pos = c["pos"]
-        if c["state"] == "Playing" and c["clock"]:
-            pos += (time.monotonic() - c["stamp"]) * 1000.0
-            
-        self.updated.emit({"state": c["state"], "pos": pos, "length": c["length"], "clock": c["clock"],
-                           "artist": c["artist"], "title": c["title"], "player": self.player})
-
-# AIMP tidak punya dukungan SMTC bawaan, jadi dibaca lewat Remote API-nya sendiri:
-# jendela "AIMP2_RemoteInfo" (pesan WM_AIMP_*) + memory-mapped file "AIMP2_RemoteInfo" (metadata).
-AIMP_NAME = "AIMP2_RemoteInfo"
-WM_AIMP_COMMAND, WM_AIMP_PROPERTY = 0x0400 + 0x75, 0x0400 + 0x77
-AIMP_PROP_POSITION, AIMP_PROP_STATE = 0x20, 0x40
-AIMP_CMD = {"play-pause": 14, "next": 17, "previous": 18}
-_aimp = {}
-
-
-def _aimp_api():
-    if not _aimp:
-        import ctypes
-        from ctypes import wintypes as w
-        u, k = ctypes.WinDLL("user32"), ctypes.WinDLL("kernel32")
-        u.FindWindowW.argtypes, u.FindWindowW.restype = [w.LPCWSTR, w.LPCWSTR], w.HWND
-        u.SendMessageTimeoutW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM, w.UINT, w.UINT,
-                                          ctypes.POINTER(ctypes.c_size_t)]
-        u.SendMessageTimeoutW.restype = ctypes.c_ssize_t
-        k.OpenFileMappingW.argtypes, k.OpenFileMappingW.restype = [w.DWORD, w.BOOL, w.LPCWSTR], w.HANDLE
-        k.MapViewOfFile.argtypes = [w.HANDLE, w.DWORD, w.DWORD, w.DWORD, ctypes.c_size_t]
-        k.MapViewOfFile.restype = ctypes.c_void_p
-        k.UnmapViewOfFile.argtypes = [ctypes.c_void_p]
-        k.CloseHandle.argtypes = [w.HANDLE]
-        _aimp.update(c=ctypes, u=u, k=k)
-    return _aimp
-
-
-def _aimp_msg(hwnd, msg, wparam, lparam=0):
-    a = _aimp_api()
-    res = a["c"].c_size_t(0)
-    ok = a["u"].SendMessageTimeoutW(hwnd, msg, wparam, lparam, 0x2, 250, a["c"].byref(res))  # ABORTIFHUNG
-    return int(res.value) if ok else None
-
-
-def parse_aimp_info(raw):
-    """Uraikan struct TAIMPRemoteFileInfo dari memory-mapped file AIMP. None bila tidak ada lagu."""
-    if len(raw) < 0x58 or struct.unpack_from("<i", raw, 0x04)[0] == 0:
-        return None
-    dur_ms = struct.unpack_from("<I", raw, 0x10)[0]
-    lens = struct.unpack_from("<6I", raw, 0x28)          # album, artist, date, filename, genre, title
-    if sum(lens) * 2 > len(raw) - 0x58:
-        return None
-    parts, pos = [], 0x58
-    for n in lens:
-        parts.append(raw[pos:pos + n * 2].decode("utf-16-le", "replace"))
-        pos += n * 2
-    album, artist, _date, fname, _genre, title = parts
-    if not title.strip():
-        title = PureWindowsPath(fname).stem
-    return {"album": album, "artist": artist, "title": title, "length": round(dur_ms / 1000)}
-
-
-def aimp_read():
-    """Info AIMP yang sedang berjalan (dict seperti backend lain) atau None."""
-    if not IS_WIN:
-        return None
-    try:
-        a = _aimp_api()
-        c, u, k = a["c"], a["u"], a["k"]
-        hwnd = u.FindWindowW(AIMP_NAME, None)
-        if not hwnd:
-            return None
-        h = k.OpenFileMappingW(0x4, False, AIMP_NAME)       # FILE_MAP_READ; jangan membuat baru
-        if not h:
-            return None
-        try:
-            view = k.MapViewOfFile(h, 0x4, 0, 0, 2048)
-            if not view:
-                return None
-            try:
-                raw = c.string_at(view, 2048)
-            finally:
-                k.UnmapViewOfFile(view)
-        finally:
-            k.CloseHandle(h)
-        info = parse_aimp_info(raw)
-        if not info:
-            return None
-        st = _aimp_msg(hwnd, WM_AIMP_PROPERTY, AIMP_PROP_STATE)          # 0 stop, 1 jeda, 2 putar
-        pos = _aimp_msg(hwnd, WM_AIMP_PROPERTY, AIMP_PROP_POSITION) or 0
-        return {"state": {2: "Playing", 1: "Paused"}.get(st, "Stopped"), "pos": float(pos),
-                "length": info["length"], "clock": True, "artist": info["artist"],
-                "title": info["title"], "player": "AIMP"}
-    except Exception as e:
-        print(f"[senandung] AIMP Remote API: {e}", file=sys.stderr)
-        return None
-
-
-def aimp_command(cmd):
-    code = AIMP_CMD.get(cmd)
-    hwnd = _aimp_api()["u"].FindWindowW(AIMP_NAME, None) if code else 0
-    if hwnd:
-        _aimp_msg(hwnd, WM_AIMP_COMMAND, code)
-
-
-class WinBackend(QObject):
-    """Membaca pemutar lewat Windows Media Session (SMTC) - Spotify, browser, dll.
-    Butuh paket: winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation
-                 winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams"""
-    updated = Signal(object)
-
-    def __init__(self, get_filter):
-        super().__init__()
-        self.get_filter = get_filter
-        self.loop = None
-        self.session = None
-        self.use_aimp = False
-        self._stop = False
-
-    def start(self):
-        threading.Thread(target=self._run, daemon=True).start()
-
-    def stop(self):
-        self._stop = True
-
-    def _run(self):
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
-        try:
-            self.loop.run_until_complete(self._main())
-        except Exception as e:
-            print(f"[senandung] Windows backend stopped: {e}", file=sys.stderr)
-
-    async def _main(self):
-        mgr = None
-        try:
-            from winrt.windows.media.control import \
-                GlobalSystemMediaTransportControlsSessionManager as Manager
-            mgr = await Manager.request_async()
-        except Exception as e:                   # tanpa winrt tetap bisa membaca AIMP
-            print(f"[senandung] winrt module not available: {e}", file=sys.stderr)
-        while not self._stop:
-            try:
-                self.updated.emit(await self.poll(mgr))
-            except Exception as e:
-                print(f"[senandung] poll SMTC: {e}", file=sys.stderr)
-            await asyncio.sleep(0.4)
-
-    async def poll(self, mgr):
-        from datetime import datetime, timezone
-        prefer, black, strict = self.get_filter()
-
-        def score(state, rank):
-            return (1000 if state == "Playing" else 500 if state == "Paused" else 0) - rank
-
-        best, best_score, best_state, best_app = None, -1e9, "", ""
-        aimp = None
-        rank = rank_player("aimp", prefer, black, strict)
-        if rank is not None:                              # AIMP dulu: menang bila nilainya sama
-            aimp = aimp_read()
-            if aimp:
-                best_score = score(aimp["state"], rank)
-        for s in (mgr.get_sessions() if mgr else []):
-            app = s.source_app_user_model_id or ""
-            rank = rank_player(app, prefer, black, strict)
-            if rank is None:
-                continue
-            st = int(s.get_playback_info().playback_status)      # 4 = Playing, 5 = Paused
-            state = "Playing" if st == 4 else "Paused" if st == 5 else "Stopped"
-            if score(state, rank) > best_score:
-                best, best_score, best_state, best_app = s, score(state, rank), state, app
-                aimp = None
-        self.use_aimp = aimp is not None
-        if aimp is not None:
-            self.session = None
-            return aimp
-        if best is None:
-            self.session = None
-            return None
-        self.session = best
-        props = await best.try_get_media_properties_async()
-        tl = best.get_timeline_properties()
-        pos_ms = tl.position.total_seconds() * 1000
-        end_s = tl.end_time.total_seconds()
-        clock = not (end_s <= 0 and pos_ms <= 0)      # sebagian pemutar tidak memberi timeline
-        if best_state == "Playing":                       # posisi dilaporkan saat last_updated_time
-            lu = tl.last_updated_time
-            if lu.tzinfo is None:
-                lu = lu.replace(tzinfo=timezone.utc)
-            pos_ms += max(0.0, min(30000.0, (datetime.now(timezone.utc) - lu).total_seconds() * 1000))
-        if end_s > 0:
-            pos_ms = min(pos_ms, end_s * 1000)
-        return {"state": best_state, "pos": pos_ms, "length": round(end_s), "clock": clock,
-                "artist": props.artist or "", "title": props.title or "", "player": best_app}
-
-    def command(self, cmd):
-        if self.use_aimp:
-            aimp_command(cmd)
-            return
-        s, loop = self.session, self.loop
-        if s is None or loop is None:
-            return
-
-        async def go():
-            if cmd == "previous":
-                await s.try_skip_previous_async()
-            elif cmd == "next":
-                await s.try_skip_next_async()
-            else:
-                await s.try_toggle_play_pause_async()
-        asyncio.run_coroutine_threadsafe(go(), loop)
-
-
-def make_backend(get_filter):
-    if IS_LINUX:
-        # playerctl dipakai sebagai backend utama. Backend D-Bus (LinuxDBusBackend) di PySide6
-        # melempar TypeError saat start (bus.connect) dan tidak bisa membaca metadata, jadi hanya
-        # dipakai sebagai cadangan bila playerctl tidak ada.
-        if shutil.which("playerctl"):
-            return LinuxBackend(get_filter)
-        try:
-            from PySide6.QtDBus import QDBusConnection
-            if QDBusConnection.sessionBus().isConnected():
-                return LinuxDBusBackend(get_filter)
-        except Exception as e:
-            print(f"[senandung] D-Bus backend unavailable: {e}", file=sys.stderr)
-        print("[senandung] ERROR: playerctl not found and D-Bus backend unavailable.", file=sys.stderr)
-        return None
-    if IS_WIN:
-        return WinBackend(get_filter)
-    return None
+# --------------------------------------------------------------------- pemutar (backend: paket players/)
+from players import (IS_LINUX, IS_WIN, aimp_read, make_backend, rank_player,  # noqa: E402
+                     short_name, split_list)
 
 
 def list_players():
@@ -1019,6 +479,7 @@ def list_players():
     print("\n" + tr("priority_line", items=", ".join(prefer) or "-",
                       strict=tr("yes" if strict else "no")))
     print(tr("blacklist_line", items=", ".join(black) or "-"))
+
 
 
 # --------------------------------------------------------------------- jendela OSD
@@ -1189,7 +650,7 @@ class OSD(QWidget):
         try:
             folder.mkdir(parents=True, exist_ok=True)
             lrc.write_text(raw.rstrip("\n") + "\n", "utf-8")
-            (folder / name.replace(".lrc", ".romaji.lrc")).unlink(missing_ok=True)  # buat ulang
+            (folder / romaji_name(name)).unlink(missing_ok=True)  # buat ulang
         except OSError as e:
             self.say(tr("save_failed", err=e), 3.0)
             return False

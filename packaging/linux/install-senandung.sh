@@ -213,6 +213,7 @@ command -v playerctl >/dev/null 2>&1 || warn "$(T no_playerctl)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 awk '/^__ARCHIVE__$/{f=1;next} f' "$0" | base64 -d | tar xz -C "$TMP" || die "$(T bad_archive)"
 [ -f "$TMP/senandung.py" ] || die "$(T no_script)"
+for pkg in romanize players; do [ -f "$TMP/$pkg/__init__.py" ] || die "$(T no_script)"; done
 [ -d "$TMP/assets/icons/png" ] || die "$(T no_icons)"
 
 # ------------------------------------------------------------------ Python environment
@@ -229,6 +230,7 @@ say "$(T dl_mods)"
 # ------------------------------------------------------------------ app files
 pkill -f "$PREFIX/senandung.py" 2>/dev/null || true     # stop an older running version
 install -m 0644 "$TMP/senandung.py" "$PREFIX/senandung.py"
+for pkg in romanize players; do rm -rf "$PREFIX/$pkg"; cp -r "$TMP/$pkg" "$PREFIX/$pkg"; done
 rm -rf "$PREFIX/assets"; mkdir -p "$PREFIX/assets"
 cp -r "$TMP/assets/icons" "$PREFIX/assets/icons"
 rm -f "$ICON_DIR/$APP.svg"      # an old svg icon would override the PNGs if left behind
