@@ -54,7 +54,7 @@ def parse_aimp_info(raw):
     album, artist, _date, fname, _genre, title = parts
     if not title.strip():
         title = PureWindowsPath(fname).stem
-    return {"album": album, "artist": artist, "title": title, "length": round(dur_ms / 1000)}
+    return {"album": album, "artist": artist, "title": title, "length": round(dur_ms / 1000), "path": fname}
 
 
 def aimp_read():
@@ -87,7 +87,7 @@ def aimp_read():
         pos = _aimp_msg(hwnd, WM_AIMP_PROPERTY, AIMP_PROP_POSITION) or 0
         return {"state": {2: "Playing", 1: "Paused"}.get(st, "Stopped"), "pos": float(pos),
                 "length": info["length"], "clock": True, "artist": info["artist"],
-                "title": info["title"], "player": "AIMP"}
+                "title": info["title"], "player": "AIMP", "path": info.get("path", "")}
     except Exception as e:
         print(f"[senandung] AIMP Remote API: {e}", file=sys.stderr)
         return None

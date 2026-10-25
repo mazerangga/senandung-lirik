@@ -158,7 +158,7 @@ Buka lewat menu klik kanan, **Pengaturan…**. Beberapa yang paling sering dipak
 - **Folder lirik**: bawaan `~/lyrics`. Berkas bernama `Artis - Judul.lrc`, dan `Artis - Judul.romaji.v4.lrc` untuk romanisasi yang tersimpan (angka `v4` berubah saat aturan romanisasi berubah; lihat [Romanisasi](#romanisasi)).
 - **Simpan lirik sebagai `.lrc`**: matikan jika tidak ingin menyimpan apa pun ke disk.
 - **Romanisasi**: `off`, `romaji`, atau `both`.
-- **Geser waktu**: bawaan 500 ms.
+- **Geser waktu**: bawaan 0 ms. Geser per lagu (roda mouse) disimpan di file `.lrc` lagunya sebagai `[offset:N]`.
 
 Kamu juga bisa menaruh `.lrc` buatan sendiri di folder lirik; berkas lokal selalu dipakai lebih dulu sebelum mencari online.
 

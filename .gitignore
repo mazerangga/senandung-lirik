@@ -12,3 +12,4 @@ lyrics/
 installer-out/
 Senandung-Setup-*.exe
 venv*/
+senandung-fix.patch

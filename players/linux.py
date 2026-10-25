@@ -3,13 +3,13 @@ import time
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal, Slot
 
-from .common import rank_player
+from .common import file_url_to_path, rank_player
 
 
 class LinuxBackend(QObject):
     """Membaca pemutar lewat playerctl (MPRIS)."""
     updated = Signal(object)          # dict info pemutar, atau None bila tidak ada pemutar
-    FMT = "{{playerName}}|||{{status}}|||{{position}}|||{{mpris:length}}|||{{artist}}|||{{title}}"
+    FMT = "{{playerName}}|||{{status}}|||{{position}}|||{{mpris:length}}|||{{artist}}|||{{title}}|||{{xesam:url}}"
 
     def __init__(self, get_filter):
         super().__init__()
@@ -47,7 +47,8 @@ class LinuxBackend(QObject):
             self.player = None
             self.updated.emit(None)
             return
-        name, state, pos, length, artist, title = best
+        name, state, pos, length, artist, title = best[:6]
+        path = file_url_to_path(best[6]) if len(best) > 6 else ""
         self.player = name
         clock = True
         try:
@@ -59,7 +60,7 @@ class LinuxBackend(QObject):
         except ValueError:
             dur = 0
         self.updated.emit({"state": state, "pos": pos_ms, "length": dur, "clock": clock,
-                           "artist": artist, "title": title, "player": name})
+                           "artist": artist, "title": title, "player": name, "path": path})
 
     def command(self, cmd):                    # previous | play-pause | next
         if self.player:
@@ -117,7 +118,7 @@ class LinuxDBusBackend(QObject):
 
     def _init_player(self, bus_name):
         if bus_name not in self.cache:
-            self.cache[bus_name] = {"state": "Stopped", "pos": 0.0, "length": 0, "clock": False, "artist": "", "title": "", "stamp": 0.0}
+            self.cache[bus_name] = {"state": "Stopped", "pos": 0.0, "length": 0, "clock": False, "artist": "", "title": "", "path": "", "stamp": 0.0}
         self._fetch_prop(bus_name, "PlaybackStatus")
         self._fetch_prop(bus_name, "Metadata")
         self._fetch_prop(bus_name, "Position")
@@ -198,6 +199,7 @@ class LinuxDBusBackend(QObject):
 
     def _parse_meta(self, c, meta):
         c["title"] = str(meta.get("xesam:title", ""))
+        c["path"] = file_url_to_path(meta.get("xesam:url", ""))
         artists = meta.get("xesam:artist", [])
         c["artist"] = ", ".join(artists) if isinstance(artists, list) else str(artists)
         c["length"] = round(int(meta.get("mpris:length", 0)) / 1000000.0)
@@ -227,4 +229,5 @@ class LinuxDBusBackend(QObject):
             pos += (time.monotonic() - c["stamp"]) * 1000.0
             
         self.updated.emit({"state": c["state"], "pos": pos, "length": c["length"], "clock": c["clock"],
-                           "artist": c["artist"], "title": c["title"], "player": self.player})
+                           "artist": c["artist"], "title": c["title"], "player": self.player,
+                           "path": c.get("path", "")})

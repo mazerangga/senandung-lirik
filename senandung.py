@@ -42,8 +42,8 @@ from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QGuiApplication
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
-                               QDialogButtonBox, QFileDialog, QFontComboBox, QFormLayout, QLabel,
-                               QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
+                               QDialogButtonBox, QFileDialog, QFontComboBox, QFormLayout, QHBoxLayout,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
                                QSpinBox, QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
 
 APP_ID = "senandung"
@@ -55,10 +55,12 @@ DEFAULTS = {
     "font_family": "",
     "font_size": 26,
     "text_color": "#ffffff",
-    "hl_color": "#1ed760",
+    "hl_color": "#1ed760",      # warna font sorot (baris aktif di mode scroll)
+    "kara_color": "",           # warna isi karaoke; kosong = ikut hl_color
+    "line_spacing": 100,        # jarak antar baris, persen (100 = bawaan)
     "outline": True,
     "wipe": True,                # efek isi warna per baris (mode dua baris & baris aktif)
-    "offset_ms": 500,
+    "offset_ms": 0,
     "romaji": "romaji",          # off | romaji | both
     "align": "zigzag",           # left | center | right | zigzag (zigzag = gaya MiniLyrics)
     "players": "spotify,aimp,foobar2000,musicbee,winamp,vlc,mpv,amarok",  # prioritas (urutan)
@@ -114,6 +116,7 @@ STRINGS = {
     "locked_toast": {"id": "Terkunci: buka lewat menu ikon tray",
                      "en": "Locked: unlock from the tray icon menu"},
     "offset_toast": {"id": "Geser waktu: {v} ms", "en": "Time offset: {v} ms"},
+    "offset_saved": {"id": "Geser waktu disimpan: {v} ms", "en": "Time offset saved: {v} ms"},
     "tray_msg": {"id": "Masih berjalan di system tray.", "en": "Still running in the system tray."},
     "tray_msg_auto": {"id": " Akan muncul lagi otomatis saat lagu berganti.",
                       "en": " It will reappear automatically when the song changes."},
@@ -142,8 +145,13 @@ STRINGS = {
     "use_font": {"id": "Pakai font ini (kalau tidak, font sistem)",
                  "en": "Use this font (otherwise the system font)"},
     "lbl_font_size": {"id": "Ukuran font", "en": "Font size"},
-    "lbl_text_color": {"id": "Warna teks", "en": "Text color"},
-    "lbl_hl_color": {"id": "Warna baris aktif", "en": "Active line color"},
+    "lbl_text_color": {"id": "Warna font dasar", "en": "Base font color"},
+    "lbl_hl_color": {"id": "Warna font sorot (baris aktif)", "en": "Highlight font color (active line)"},
+    "lbl_kara_color": {"id": "Warna font karaoke (isi per baris)", "en": "Karaoke font color (per-line fill)"},
+    "kara_follow": {"id": "Ikuti warna sorot", "en": "Follow highlight"},
+    "kara_follow_tip": {"id": "Kosongkan warna karaoke: pakai warna font sorot",
+                        "en": "Clear the karaoke color: use the highlight font color"},
+    "lbl_line_spacing": {"id": "Jarak antar baris", "en": "Line spacing"},
     "outline": {"id": "Garis tepi teks", "en": "Text outline"},
     "gradient": {"id": "Teks gradien mengkilap", "en": "Glossy gradient text"},
     "wipe": {"id": "Efek isi warna per baris (karaoke)", "en": "Per-line color fill effect (karaoke)"},
@@ -290,21 +298,186 @@ def http_json(url):
         return json.loads(r.read().decode("utf-8"))
 
 
+def _clean_title(title):
+    """Buang bagian yang sering membuat pencarian gagal: (feat. ...), [Live], - Remastered, dll."""
+    t = re.sub(r"[\(\[（【][^\)\]）】]*[\)\]）】]", " ", title)
+    t = re.sub(r"\s+[-–—]\s+(remaster\w*|live|ver\w*|mono|stereo|single|radio|explicit|from)\b.*$", "",
+               t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+(feat|ft)\.?\s.*$", "", t, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", t).strip() or title
+
+
+def _first_artist(artist):
+    """Artis pertama saja: 'A, B' / 'A & B' / 'A feat. B' -> 'A'."""
+    a = re.split(r"\s*(?:,|;|/|&|\bfeat\.?|\bft\.?|、|，)\s*", artist, maxsplit=1, flags=re.IGNORECASE)[0]
+    return a.strip() or artist
+
+
+def _plain(text):
+    """Huruf/angka saja, huruf kecil. Hanzi diubah ke pinyin tanpa nada (bila pypinyin ada)."""
+    if HAN_RX.search(text):
+        try:
+            from pypinyin import Style, lazy_pinyin
+            text = "".join(lazy_pinyin(text, style=Style.NORMAL))
+        except Exception:
+            pass
+    return re.sub(r"[\W_]+", "", text.lower())
+
+
+HAN_RX = re.compile("[\u3400-\u4dbf\u4e00-\u9fff]")
+
+
+def _pick_synced(items, title, duration_s, loose=False):
+    """Pilih lirik tersinkron terbaik dari hasil pencarian LRCLIB.
+    Urutan: judul sama (pinyin dihitung sama) + durasi cocok -> durasi cocok (<=4 dtk)
+    -> bila loose, hasil pertama."""
+    items = [it for it in items if it.get("syncedLyrics")]
+    if not items:
+        return None
+    want = _plain(title)
+
+    def dd(it):
+        d = it.get("duration") or 0
+        return abs(d - duration_s) if duration_s > 0 and d else 9999
+
+    same = [it for it in items if want and _plain(it.get("trackName") or "") == want]
+    for pool in (same, items):
+        pool = sorted(pool, key=dd)
+        if pool and (dd(pool[0]) <= 4 or (pool is same and duration_s <= 0)):
+            return pool[0]["syncedLyrics"]
+    return items[0]["syncedLyrics"] if loose else None
+
+
+_meta_cache = {}
+
+
+def lrc_meta(path):
+    """Tag [ar:] dan [ti:] dari kepala file .lrc -> (artis, judul); kosong bila tidak ada.
+    Hanya 4 KB awal yang dibaca, hasilnya di-cache selama file tidak berubah."""
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+        if key in _meta_cache:
+            return _meta_cache[key]
+        with open(path, "rb") as fh:
+            data = fh.read(4096)
+        for enc in ("utf-8-sig", "gb18030", "cp1252"):
+            try:
+                head = data.decode(enc)
+                break
+            except UnicodeDecodeError:
+                head = ""
+        ar = re.search(r"^\s*\[ar:([^\]]*)\]", head, re.IGNORECASE | re.MULTILINE)
+        ti = re.search(r"^\s*\[ti:([^\]]*)\]", head, re.IGNORECASE | re.MULTILINE)
+        _meta_cache[key] = (ar.group(1).strip() if ar else "", ti.group(1).strip() if ti else "")
+        return _meta_cache[key]
+    except OSError:
+        return ("", "")
+
+
+def add_lrc_tags(raw, artist, title):
+    """Tambahkan [ar:] dan [ti:] di kepala teks .lrc bila belum ada (yang sudah ada tidak diubah),
+    supaya file tetap dikenali lewat isinya sendiri."""
+    def clean(v):
+        return re.sub(r"[\[\]\r\n]+", " ", v).strip()
+    head = []
+    if artist.strip() and not re.search(r"^\s*\[ar:", raw, re.IGNORECASE | re.MULTILINE):
+        head.append(f"[ar:{clean(artist)}]")
+    if title.strip() and not re.search(r"^\s*\[ti:", raw, re.IGNORECASE | re.MULTILINE):
+        head.append(f"[ti:{clean(title)}]")
+    return ("\n".join(head) + "\n" + raw) if head else raw
+
+
+def find_song_lrc(path, artist, title):
+    """.lrc di folder file lagu. path = lokasi file lagu dari player ('' bila tidak diketahui)."""
+    if not path:
+        return None
+    try:
+        song = Path(path)
+        same = song.with_suffix(".lrc")
+        if same.is_file():
+            return same
+        hit = resolve_lrc(song.parent, artist, title)
+        return hit if hit.is_file() else None
+    except OSError:
+        return None
+
+
+def resolve_lrc(folder, artist, title):
+    """File .lrc lokal untuk lagu ini. Urutan: nama persis 'Artis - Judul.lrc'; kalau tidak ada,
+    cari di folder berdasarkan nama file DAN tag [ar:]/[ti:] di dalam file (huruf besar/kecil,
+    tanda baca, hanzi vs pinyin tidak dipersoalkan). Bila file mencantumkan artis yang berbeda
+    dari artis lagu, file itu ditolak. Bila tak ada yang cocok: nama persis."""
+    exact = folder / lrc_name(artist, title)
+    if exact.exists():
+        return exact
+    try:
+        files = [f for f in folder.glob("*.lrc") if ".romaji" not in f.name.lower()]
+    except OSError:
+        return exact
+    ct, ca, pa_full = _plain(_clean_title(title)), _plain(_first_artist(artist)), _plain(artist)
+    if not files or not ct:
+        return exact
+    best, best_score = None, 0.0
+    for f in files:
+        m_ar, m_ti = lrc_meta(f)
+        ar_first, ar_full = _plain(_first_artist(m_ar)), _plain(m_ar)
+        artist_ok = bool((ca and ar_full and ca in ar_full) or (ar_first and pa_full and ar_first in pa_full))
+        comparable = not (re.search(r"[^\x00-\x7f]", m_ar) or re.search(r"[^\x00-\x7f]", artist))
+        if comparable and ar_full and ca and not artist_ok:
+            continue          # file menyebut artis lain (sama-sama huruf Latin): bukan lagu ini
+        st, mt = _plain(f.stem), _plain(_clean_title(m_ti)) if m_ti else ""
+        if st in (ca + ct, ct + ca):
+            score = 3.0
+        elif mt and mt == ct:
+            score = 2.5                                # judul di dalam file cocok
+        elif st == ct:
+            score = 2.0
+        elif len(ct) >= 4 and (ct in st or (mt and ct in mt)):
+            score = 1.0 + (0.5 if ca and ca in st else 0.0)
+        else:
+            continue
+        if artist_ok:
+            score += 0.7                               # artis di dalam file ikut cocok
+        if score > best_score or (score == best_score and best and f.stat().st_mtime > best.stat().st_mtime):
+            best, best_score = f, score
+    return best or exact
+
+
 def fetch_online(artist, title, duration_s):
     base = "https://lrclib.net/api/"
-    q = urllib.parse.urlencode({"artist_name": artist, "track_name": title})
-    try:
-        res = http_json(f"{base}get?{q}" + (f"&duration={duration_s}" if duration_s > 0 else ""))
-        if res.get("syncedLyrics"):
-            return res["syncedLyrics"]
-    except Exception as e:
-        print(f"[senandung] LRCLIB get: {e}", file=sys.stderr)
-    try:
-        for item in http_json(f"{base}search?{q}"):
-            if item.get("syncedLyrics"):
-                return item["syncedLyrics"]
-    except Exception as e:
-        print(f"[senandung] LRCLIB search: {e}", file=sys.stderr)
+    ctitle, cartist = _clean_title(title), _first_artist(artist)
+
+    # 1. cocok persis (get): nama asli, lalu nama yang sudah dibersihkan
+    for a, t in dict.fromkeys([(artist, title), (cartist, ctitle)]):
+        q = urllib.parse.urlencode({"artist_name": a, "track_name": t})
+        try:
+            res = http_json(f"{base}get?{q}" + (f"&duration={duration_s}" if duration_s > 0 else ""))
+            if res.get("syncedLyrics"):
+                return res["syncedLyrics"]
+        except Exception as e:
+            print(f"[senandung] LRCLIB get: {e}", file=sys.stderr)
+
+    # 2. pencarian: artis+judul dulu (hasil pertama boleh dipakai), lalu teks bebas
+    #    (hasil harus cocok judulnya atau durasinya, supaya tidak salah lagu)
+    tries = [({"artist_name": artist, "track_name": title}, True),
+             ({"artist_name": cartist, "track_name": ctitle}, True),
+             ({"q": f"{cartist} {ctitle}"}, False),
+             ({"q": ctitle}, False)]
+    seen = set()
+    for params, loose in tries:
+        key = tuple(sorted(params.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            found = _pick_synced(http_json(f"{base}search?" + urllib.parse.urlencode(params)),
+                                 ctitle, duration_s, loose)
+        except Exception as e:
+            print(f"[senandung] LRCLIB search: {e}", file=sys.stderr)
+            continue
+        if found:
+            return found
     return None
 
 
@@ -315,6 +488,10 @@ def read_text_file(path):
         return data.decode("utf-16", "replace")
     try:
         return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        pass
+    try:
+        return data.decode("gb18030")            # banyak file .lrc Mandarin lama berbentuk GBK
     except UnicodeDecodeError:
         return data.decode("cp1252", "replace")
 
@@ -339,23 +516,31 @@ def search_lrclib(artist, title):
     return out[:40]
 
 
-def load_lyrics(artist, title, duration_s, cfg):
+def load_lyrics(artist, title, duration_s, cfg, path=""):
     """Dijalankan di thread terpisah. Mengembalikan list dict {t, text, roman}."""
     folder = Path(os.path.expanduser(cfg["lyrics_dir"]))
     name = lrc_name(artist, title)
-    lrc = folder / name
+    lrc = folder / name                       # nama baku untuk menyimpan hasil unduhan
+    found = resolve_lrc(folder, artist, title)
+    # file .lrc di folder lagu (lagu offline): sama nama dengan file lagu, atau cocok lewat nama/tag.
+    # Bila ada juga di folder lirik, yang lebih baru dipakai (pilihan manual terakhir menang).
+    song_lrc = find_song_lrc(path, artist, title)
+    if song_lrc and (not found.exists() or song_lrc.stat().st_mtime > found.stat().st_mtime):
+        found = song_lrc
     parsed = []
     
     # 1. Siapkan wadah untuk teks lirik mentah dan nilai offset
     raw_text = ""      
     offset_val = 0     
 
-    if lrc.exists():
+    if found.exists():
         # 2. Tampung ke raw_text dulu agar bisa di-regex nanti
-        raw_text = lrc.read_text("utf-8", errors="replace") 
+        raw_text = read_text_file(found)
         parsed = parse_lrc(raw_text)
         if parsed:
-            print(f"[senandung] lyrics loaded from local file: {lrc.name}")
+            print(f"[senandung] lyrics loaded from local file: {found.name}")
+        else:
+            print(f"[senandung] local file has no timestamped lines: {found.name}", file=sys.stderr)
             
     if not parsed:
         # 3. Tampung hasil online ke raw_text
@@ -411,10 +596,10 @@ def load_lyrics(artist, title, duration_s, cfg):
 class Loader(QObject):
     done = Signal(str, object)
 
-    def load(self, key, artist, title, duration_s, cfg):
+    def load(self, key, artist, title, duration_s, cfg, path=""):
         def run():
             try:
-                self.done.emit(key, load_lyrics(artist, title, duration_s, cfg))
+                self.done.emit(key, load_lyrics(artist, title, duration_s, cfg, path))
             except Exception as e:  # jangan sampai thread mati diam-diam
                 print(f"[senandung] failed to load lyrics: {e}", file=sys.stderr)
                 self.done.emit(key, [])
@@ -518,6 +703,9 @@ class OSD(QWidget):
         # Wayland murni melarang aplikasi menentukan posisi; di X11/XWayland/Windows boleh.
         self.can_place = QGuiApplication.platformName() != "wayland"
         self.pos_timer = QTimer(self, singleShot=True, interval=500, timeout=self.save_pos)
+        self.local_offset = 0                                   # geser waktu lagu ini (ms), disimpan di .lrc
+        self._offset_pending = None
+        self.offset_timer = QTimer(self, singleShot=True, interval=700, timeout=self.save_offset)
         if self.can_place and cfg.get("pos_x") >= 0:
             self.move(cfg.get("pos_x"), cfg.get("pos_y"))
 
@@ -649,6 +837,7 @@ class OSD(QWidget):
         existed = lrc.exists()
         try:
             folder.mkdir(parents=True, exist_ok=True)
+            raw = add_lrc_tags(raw, cur["artist"], cur["title"])
             lrc.write_text(raw.rstrip("\n") + "\n", "utf-8")
             (folder / romaji_name(name)).unlink(missing_ok=True)  # buat ulang
         except OSError as e:
@@ -744,7 +933,8 @@ class OSD(QWidget):
         state, reported = info["state"], info["pos"]
         artist, title = info["artist"], info["title"]
         self.player_name = info.get("player", "")
-        self.cur = {"artist": artist, "title": title, "length": info["length"]} \
+        self.cur = {"artist": artist, "title": title, "length": info["length"],
+                    "path": info.get("path", "")} \
             if title.strip() else None
         now = time.monotonic() * 1000
         prev = self.play_state
@@ -778,7 +968,7 @@ class OSD(QWidget):
                 return
             self.note = tr("searching")
             print(f"[senandung] track: {artist} - {title}")
-            self.loader.load(key, artist, title, info["length"], self.s)
+            self.loader.load(key, artist, title, info["length"], self.s, info.get("path", ""))
 
     def on_lyrics(self, key, entries):
         if key != self.track_key:
@@ -787,16 +977,14 @@ class OSD(QWidget):
         self.times = [e["t"] for e in entries]
         self.idx, self.scroll = -1, 0.0
         self.note = "" if entries else tr("not_found")
-        # --- [TAMBAHKAN PENANGKAPAN OFFSET DI SINI] ---
-        # Tarik nilai offset dari lirik pertama, default 0 jika tidak ada
+        # offset per lagu dibaca dari tag [offset:N] di file .lrc (lihat load_lyrics)
         self.local_offset = entries[0].get("_offset", 0) if entries else 0
-        # ----------------------------------------------
 
     # ---- waktu
     def pos_ms(self):
         now = time.monotonic() * 1000
         p = self.base_pos + (now - self.base_stamp) if self.play_state == "Playing" else self.base_pos
-        p += getattr(self, "local_offset", 0)
+        p += self.local_offset
         return p % 42000 if self.demo else p
 
     def tick(self):
@@ -822,6 +1010,13 @@ class OSD(QWidget):
         if not rom or mode == "off":
             return [txt]
         return [rom] if mode == "romaji" else [txt, rom]
+
+    def _kara(self):
+        """Warna isi karaoke; kosong = ikut warna font sorot."""
+        return QColor(self.s["kara_color"] or self.s["hl_color"])
+
+    def _spacing(self):
+        return max(50, min(250, self.s["line_spacing"])) / 100.0
 
     def _brush(self, color, top, bottom):
         if not self.s["gradient"]:
@@ -858,13 +1053,13 @@ class OSD(QWidget):
         if wipe > 0:
             p.save()
             p.setClipRect(QRectF(x - 2, top - 4, w * min(wipe, 1.0) + 2, fm.height() + 8))
-            p.fillPath(path, self._brush(QColor(self.s["hl_color"]), top, bottom))
+            p.fillPath(path, self._brush(self._kara(), top, bottom))
             p.restore()
         p.setOpacity(1.0)
         return fm.height()
 
     def _row_h(self):
-        h = QFontMetricsF(self._font()).height() * 1.32
+        h = QFontMetricsF(self._font()).height() * 1.32 * self._spacing()
         return h * (1.85 if self.s["romaji"] == "both" else 1.0)
 
     def _wipe(self, i):
@@ -878,7 +1073,7 @@ class OSD(QWidget):
         if len(texts) == 1:
             self._draw(p, texts[0], yc, color, opa, align, wipe, fit)
         else:
-            gap = QFontMetricsF(self._font(fit)).height() * 0.52
+            gap = QFontMetricsF(self._font(fit)).height() * 0.52 * self._spacing()
             self._draw(p, texts[0], yc - gap, color, opa, align, wipe, fit)
             self._draw(p, texts[1], yc + gap, color, opa * 0.85, align, wipe, 0.78 * fit)
 
@@ -997,7 +1192,10 @@ class OSD(QWidget):
         bawah kanan). Baris aktif terisi warna; baris berikutnya redup dan memudar masuk."""
         top = TB_H
         slot_h = (self.height() - top) / 2
-        fit = min(1.0, slot_h / self._row_h())                       # otomatis kecilkan bila jendela pendek
+        fh = QFontMetricsF(self._font()).height()
+        both = self.s["romaji"] == "both"
+        need = fh * ((1.04 * self._spacing() + 1.06) if both else 1.25)   # tinggi blok satu entri
+        fit = min(1.0, slot_h / need)                                # otomatis kecilkan bila jendela pendek
         base = QColor(self.s["text_color"])
         ramp = min(1.0, (time.monotonic() * 1000 - self.idx_changed) / 240)
         cur = max(self.idx, 0)
@@ -1082,15 +1280,42 @@ class OSD(QWidget):
             self.toggle_mode()
 
     def wheelEvent(self, ev):
-        if not self.lyrics: return
+        if not self.lyrics:
+            return
         d = 100 if ev.angleDelta().y() > 0 else -100
-        
-        # Adjust timer lokal untuk lirik yang sedang berjalan
-        self.local_offset = getattr(self, "local_offset", 0) + d
+        self.local_offset += d
         self.say(tr("offset_toast", v=self.local_offset))
-        
-        # Notif untuk save (Opsional)
-        self.note = tr("offset_save_note") # Buat entry tr ini di STRINGS
+        if self.cur:                         # simpan ke file .lrc setelah berhenti memutar roda
+            self._offset_pending = (dict(self.cur), f"{self.cur['artist']}|{self.cur['title']}")
+            self.offset_timer.start()
+
+    def save_offset(self):
+        """Tulis geser waktu lagu ini ke file .lrc sebagai tag [offset:N] supaya diingat
+        saat lagu diputar ulang (dibaca kembali oleh load_lyrics)."""
+        if not self._offset_pending:
+            return
+        cur, key = self._offset_pending
+        self._offset_pending = None
+        off = int(self.local_offset)
+        lrc = resolve_lrc(Path(os.path.expanduser(self.s["lyrics_dir"])), cur["artist"], cur["title"])
+        try:
+            if lrc.exists():
+                raw = read_text_file(lrc)
+            elif self.s["save_local"] and key == self.track_key and self.lyrics:
+                raw = "\n".join(fmt_time(e["t"]) + e["text"] for e in self.lyrics)
+            else:
+                return
+            raw = raw.replace("\r\n", "\n").replace("\r", "\n").lstrip("\ufeff")
+            raw = re.sub(r"(?im)^[ \t]*\[offset:[^\]]*\][ \t]*\n?", "", raw)
+            if off:
+                raw = f"[offset:{off}]\n" + raw
+            lrc.parent.mkdir(parents=True, exist_ok=True)
+            lrc.write_text(raw.rstrip("\n") + "\n", "utf-8")
+        except OSError as e:
+            self.say(tr("save_failed", err=e), 3.0)
+            return
+        self.say(tr("offset_saved", v=off))
+        print(f"[senandung] offset {off} ms saved: {lrc.name}")
 
     def contextMenuEvent(self, ev):
         build_menu(self).exec(ev.globalPos())
@@ -1148,11 +1373,23 @@ class SettingsDialog(QDialog):
         self.use_font.setChecked(bool(cfg.get("font_family")))
         self.size = QSpinBox(minimum=8, maximum=120, value=cfg.get("font_size"))
         self.colors = {}
-        for key in ("text_color", "hl_color"):
-            b = QPushButton(cfg.get(key))
+        for key in ("text_color", "hl_color", "kara_color"):
+            val = cfg.get(key)
+            b = QPushButton(val or tr("kara_follow"))
             b.clicked.connect(lambda _=False, k=key, btn=b: self.pick(k, btn))
-            self.colors[key] = (cfg.get(key), b)
-            self._paint_btn(b, cfg.get(key))
+            self.colors[key] = (val, b)
+            self._paint_btn(b, val or cfg.get("hl_color"))
+        self.kara_reset = QPushButton("↺")
+        self.kara_reset.setToolTip(tr("kara_follow_tip"))
+        self.kara_reset.setFixedWidth(32)
+        self.kara_reset.clicked.connect(self.reset_kara)
+        kara_row = QWidget()
+        kl = QHBoxLayout(kara_row)
+        kl.setContentsMargins(0, 0, 0, 0)
+        kl.addWidget(self.colors["kara_color"][1], 1)
+        kl.addWidget(self.kara_reset)
+        self.spacing = QSpinBox(minimum=60, maximum=200, singleStep=5, value=cfg.get("line_spacing"))
+        self.spacing.setSuffix(" %")
         self.outline = QCheckBox(tr("outline"), checked=cfg.get("outline"))
         self.gradient = QCheckBox(tr("gradient"), checked=cfg.get("gradient"))
         self.wipe = QCheckBox(tr("wipe"), checked=cfg.get("wipe"))
@@ -1180,7 +1417,9 @@ class SettingsDialog(QDialog):
         for label, w in ((tr("lbl_language"), self.lang), (tr("lbl_mode"), self.mode),
                          (tr("lbl_font"), self.font), ("", self.use_font),
                          (tr("lbl_font_size"), self.size), (tr("lbl_text_color"), self.colors["text_color"][1]),
-                         (tr("lbl_hl_color"), self.colors["hl_color"][1]), ("", self.outline),
+                         (tr("lbl_hl_color"), self.colors["hl_color"][1]),
+                         (tr("lbl_kara_color"), kara_row),
+                         (tr("lbl_line_spacing"), self.spacing), ("", self.outline),
                          ("", self.gradient), ("", self.wipe), ("", self.on_top), ("", self.auto_show),
                          (tr("lbl_align"), self.align), (tr("lbl_romaji"), self.romaji),
                          (tr("lbl_offset"), self.offset), (tr("lbl_players"), self.players),
@@ -1195,15 +1434,24 @@ class SettingsDialog(QDialog):
     @staticmethod
     def _paint_btn(btn, color):
         c = QColor(color)
-        fg = "#000" if c.lightness() > 128 else "#fff"
+        fg = "#000" if (0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()) > 140 else "#fff"
         btn.setStyleSheet(f"background:{color}; color:{fg};")
 
     def pick(self, key, btn):
-        c = QColorDialog.getColor(QColor(self.colors[key][0]), self)
+        start = self.colors[key][0] or self.colors["hl_color"][0]
+        c = QColorDialog.getColor(QColor(start), self)
         if c.isValid():
             self.colors[key] = (c.name(), btn)
             btn.setText(c.name())
             self._paint_btn(btn, c.name())
+            if key == "hl_color" and not self.colors["kara_color"][0]:
+                self._paint_btn(self.colors["kara_color"][1], c.name())   # karaoke ikut sorot
+
+    def reset_kara(self):
+        btn = self.colors["kara_color"][1]
+        self.colors["kara_color"] = ("", btn)
+        btn.setText(tr("kara_follow"))
+        self._paint_btn(btn, self.colors["hl_color"][0])
 
     def save_to_cfg(self):
         c = self.cfg
@@ -1213,6 +1461,7 @@ class SettingsDialog(QDialog):
         c.set("font_size", self.size.value())
         for key, (val, _) in self.colors.items():
             c.set(key, val)
+        c.set("line_spacing", self.spacing.value())
         c.set("outline", self.outline.isChecked())
         c.set("gradient", self.gradient.isChecked())
         c.set("wipe", self.wipe.isChecked())

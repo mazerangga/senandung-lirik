@@ -158,7 +158,7 @@ Open them from the right-click menu, **Settings…**. The most useful ones:
 - **Lyrics folder**: defaults to `~/lyrics`. Files are named `Artist - Title.lrc`, and `Artist - Title.romaji.v4.lrc` for the saved romanization (the `v4` changes when the romanization rules change; see [Romanization](#romanization)).
 - **Save lyrics as `.lrc`**: turn off if you do not want anything written to disk.
 - **Romanization**: `off`, `romaji` or `both`.
-- **Time offset**: 500 ms by default.
+- **Time offset**: 0 ms by default. Per-song offset (mouse wheel) is saved in the song's `.lrc` as `[offset:N]`.
 
 You can also drop your own `.lrc` files into the lyrics folder; local files are always used before searching online.
 

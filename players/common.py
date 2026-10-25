@@ -6,6 +6,18 @@ IS_WIN = sys.platform == "win32"
 IS_LINUX = sys.platform.startswith("linux")
 
 
+def file_url_to_path(url):
+    """'file:///home/a/lagu.mp3' -> '/home/a/lagu.mp3' (juga file:///C:/...). Selain file:// -> ''."""
+    from urllib.parse import unquote, urlparse
+    u = str(url or "").strip()
+    if not u.lower().startswith("file:"):
+        return ""
+    path = unquote(urlparse(u).path)
+    if re.match(r"^/[A-Za-z]:", path):                 # file:///C:/musik/x.mp3
+        path = path[1:]
+    return path
+
+
 def split_list(text):
     return [x.strip().lower() for x in str(text).split(",") if x.strip()]
 
