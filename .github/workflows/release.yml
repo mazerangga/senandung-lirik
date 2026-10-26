@@ -17,10 +17,17 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Stamp version into source
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: python tools/stamp_version.py "${REF_NAME#v}"
+
       - name: Build Installers (.sh & .ps1)
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          # Jalankan skrip pembangun installer
-          python tools/build_installers.py
+          # Versi installer mengikuti nama tag (v1.2 -> 1.2)
+          python tools/build_installers.py --version "${REF_NAME#v}"
 
       - name: Upload Installers Artifact
         uses: actions/upload-artifact@v4
@@ -42,6 +49,12 @@ jobs:
       - name: Install PyInstaller and Dependencies
         run: |
           pip install pyinstaller PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
+
+      - name: Stamp version into source
+        shell: pwsh
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: python tools/stamp_version.py ($env:REF_NAME.TrimStart('v'))
 
       - name: Build Windows EXE
         shell: pwsh

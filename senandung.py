@@ -37,8 +37,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QObject, QPointF, QRectF, QSettings, Qt, QTimer, Signal
-from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage,
+from PySide6.QtCore import QLocale, QObject, QPointF, QRectF, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
@@ -47,6 +47,10 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox,
                                QSpinBox, QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
 
 APP_ID = "senandung"
+APP_VERSION = "dev"          # diisi otomatis dari tag rilis oleh tools/stamp_version.py (CI); "dev" = tanpa cek update
+REPO_URL = "https://github.com/mazerangga/senandung-lirik"
+LATEST_API = "https://api.github.com/repos/mazerangga/senandung-lirik/releases/latest"
+UPDATE_EVERY_S = 24 * 3600   # cek versi baru paling sering sekali sehari
 UA = "senandung/1.0 (https://github.com/mazerangga/senandung-lirik)"
 
 DEFAULTS = {
@@ -68,6 +72,9 @@ DEFAULTS = {
     "blacklist": "chrome,chromium,msedge,firefox,brave,opera,vivaldi",    # pemutar yang diabaikan
     "lyrics_dir": "~/lyrics",
     "save_local": True,
+    "check_updates": True,       # beri tahu bila ada rilis baru di GitHub (hanya memberi tahu, tidak mengunduh)
+    "last_update_check": "",     # epoch detik cek terakhir (teks)
+    "update_latest": "",         # tag rilis terbaru yang pernah terlihat, mis. v1.2
     "last_browse_dir": "",       # folder terakhir saat memilih file lirik
     "gradient": True,            # teks gradien mengkilap ala MiniLyrics
     "on_top": True,              # selalu di atas (keep above)
@@ -134,6 +141,12 @@ STRINGS = {
     "m_settings": {"id": "Pengaturan…", "en": "Settings…"},
     "m_toggle": {"id": "Tampilkan / sembunyikan", "en": "Show / hide"},
     "m_quit": {"id": "Keluar", "en": "Quit"},
+    "m_update": {"id": "Versi baru tersedia: {ver} (buka halaman unduh)",
+                 "en": "New version available: {ver} (open download page)"},
+    "update_toast": {"id": "Versi baru {ver} tersedia, lihat menu ikon tray",
+                     "en": "New version {ver} available, see the tray menu"},
+    "check_updates": {"id": "Cek versi baru otomatis (1 permintaan ke GitHub per hari)",
+                      "en": "Check for new versions automatically (one request to GitHub per day)"},
     # --- dialog pengaturan
     "settings_title": {"id": "Pengaturan Senandung", "en": "Senandung Settings"},
     "lang_auto": {"id": "Otomatis (ikut sistem)", "en": "Automatic (follow system)"},
@@ -330,6 +343,50 @@ def http_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(req, timeout=15) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+TAG_RE = re.compile(r"[vV]?\d+(?:\.\d+)*")
+
+
+def parse_ver(s):
+    """'v1.2.0' -> (1, 2). Nol di belakang dibuang supaya 1.1 == 1.1.0."""
+    if not TAG_RE.fullmatch((s or "").strip()):
+        return ()
+    v = [int(x) for x in s.strip().lstrip("vV").split(".")]
+    while len(v) > 1 and v[-1] == 0:
+        v.pop()
+    return tuple(v)
+
+
+def is_newer(latest, current):
+    a, b = parse_ver(latest), parse_ver(current)
+    return bool(a) and bool(b) and a > b
+
+
+class UpdateChecker(QObject):
+    """Memberi tahu bila ada rilis lebih baru. Hanya MEMBERI TAHU: tidak mengunduh atau memasang apa pun;
+    klik pada menu membuka halaman rilis di browser. Paling sering sekali sehari, di thread terpisah,
+    gagal diam-diam (offline, batas API, belum ada rilis)."""
+    checked = Signal(str, str)           # tag, url dari GitHub (dikirim ke thread utama)
+
+    def start(self, cfg):
+        if APP_VERSION == "dev" or not cfg.get("check_updates"):
+            return
+        try:
+            last = float(cfg.get("last_update_check") or 0)
+        except ValueError:
+            last = 0.0
+        if time.time() - last < UPDATE_EVERY_S:
+            return
+
+        def run():
+            try:
+                d = http_json(LATEST_API)
+                self.checked.emit(str(d.get("tag_name", "")), str(d.get("html_url", "")))
+            except Exception as e:
+                print(f"[senandung] update check skipped: {e}", file=sys.stderr)
+        threading.Thread(target=run, daemon=True).start()
+
 
 
 def _clean_title(title):
@@ -772,6 +829,10 @@ class OSD(QWidget):
 
         self.loader = Loader()
         self.loader.done.connect(self.on_lyrics)
+        self.update_tag = ""             # rilis lebih baru yang diketahui (kosong = tidak ada)
+        self.update_url = ""
+        self.updater = UpdateChecker()
+        self.updater.checked.connect(self.on_update_checked)
 
         self.backend = None
         self.tick_timer = QTimer(self, interval=TICK_BUSY_MS, timeout=self.tick)
@@ -859,6 +920,31 @@ class OSD(QWidget):
             self._reflag()
         self.track_key = ""          # paksa muat ulang lirik (romaji/folder bisa berubah)
         self.update()
+
+    def start_update_check(self):
+        """Tampilkan info rilis baru dari cek sebelumnya (tanpa jaringan), lalu cek lagi bila sudah > 1 hari."""
+        old = self.cfg.get("update_latest")
+        if is_newer(old, APP_VERSION):
+            self.update_tag, self.update_url = old, REPO_URL + "/releases/latest"
+        self.updater.start(self.cfg)
+
+    def on_update_checked(self, tag, url):
+        if not parse_ver(tag):
+            return
+        known = self.cfg.get("update_latest")
+        self.cfg.set("last_update_check", str(int(time.time())))
+        self.cfg.set("update_latest", tag)
+        if not is_newer(tag, APP_VERSION):
+            self.update_tag = self.update_url = ""
+            return
+        # hanya buka alamat milik repo ini, apa pun isi jawaban API
+        self.update_tag = tag
+        self.update_url = url if url.startswith(REPO_URL + "/") else REPO_URL + "/releases/latest"
+        if tag != known:                                  # baru ketahuan: beri tahu sekali
+            self.say(tr("update_toast", ver=tag), 6.0)
+
+    def open_update_page(self):
+        QDesktopServices.openUrl(QUrl(self.update_url or REPO_URL + "/releases/latest"))
 
     def say(self, text, secs=1.6):
         self.toast, self.toast_until = text, time.monotonic() + secs
@@ -1543,6 +1629,7 @@ class SettingsDialog(QDialog):
         self.black.setToolTip(tr("black_tip"))
         self.folder = QLineEdit(cfg.get("lyrics_dir"))
         self.save = QCheckBox(tr("save_local"), checked=cfg.get("save_local"))
+        self.updates = QCheckBox(tr("check_updates"), checked=cfg.get("check_updates"))
         for label, w in ((tr("lbl_language"), self.lang), (tr("lbl_mode"), self.mode),
                          (tr("lbl_font"), self.font), ("", self.use_font),
                          (tr("lbl_font_size"), self.size), (tr("lbl_text_color"), self.colors["text_color"][1]),
@@ -1553,7 +1640,7 @@ class SettingsDialog(QDialog):
                          (tr("lbl_align"), self.align), (tr("lbl_romaji"), self.romaji),
                          (tr("lbl_offset"), self.offset), (tr("lbl_players"), self.players),
                          ("", self.strict), (tr("lbl_blacklist"), self.black),
-                         (tr("lbl_folder"), self.folder), ("", self.save)):
+                         (tr("lbl_folder"), self.folder), ("", self.save), ("", self.updates)):
             form.addRow(label, w)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self.accept)
@@ -1604,6 +1691,7 @@ class SettingsDialog(QDialog):
         c.set("blacklist", self.black.text())
         c.set("lyrics_dir", self.folder.text() or "~/lyrics")
         c.set("save_local", self.save.isChecked())
+        c.set("check_updates", self.updates.isChecked())
 
 
 class LyricsSearchDialog(QDialog):
@@ -1745,6 +1833,8 @@ def build_menu(osd):
         nm = short_name(osd.player_name)
         ign.setText(tr("m_ignore_named", name=nm) if nm else tr("m_ignore"))
         ign.setEnabled(bool(nm))
+        upd.setVisible(bool(osd.update_tag))
+        upd.setText(tr("m_update", ver=osd.update_tag))
         srch.setEnabled(bool(osd.cur))
         brow.setEnabled(bool(osd.cur))
         if boot:
@@ -1764,6 +1854,9 @@ def build_menu(osd):
     m.addSeparator()
     ign = m.addAction(tr("m_ignore"))
     ign.triggered.connect(osd.blacklist_current)
+    upd = m.addAction("")
+    upd.setVisible(False)
+    upd.triggered.connect(osd.open_update_page)
     m.addAction(tr("m_settings")).triggered.connect(lambda: open_settings(osd))
     m.addAction(tr("m_toggle")).triggered.connect(osd.toggle_visible)
     m.addSeparator()
@@ -1907,6 +2000,7 @@ def main():
     tray.activated.connect(lambda r: osd.toggle_visible()
                            if r == QSystemTrayIcon.ActivationReason.Trigger else None)
     tray.show()
+    osd.start_update_check()
     sys.exit(app.exec())
 
 

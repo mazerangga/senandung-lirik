@@ -20,6 +20,7 @@ import base64
 import gzip
 import hashlib
 import io
+import os
 import py_compile
 import re
 import shutil
@@ -40,6 +41,9 @@ PS1_TEMPLATE = ROOT / "packaging" / "windows" / "install-senandung.ps1"
 PNG_SIZES = (16, 24, 32, 48, 64, 96, 128, 256)     # 512 px tidak dibawa: memperbesar installer
 TRAY_SIZES = (16, 22, 24, 32, 48, 64)
 SH_MARK = b"\n__ARCHIVE__\n"
+SH_VERSION = re.compile(rb'^VERSION="[^"]*"', re.M)
+PS1_VERSION = re.compile(rb'\$Version\s*=\s*"[^"]*"')
+VERSION_OK = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*")   # tag masuk ke skrip shell: batasi karakternya
 PS1_PAYLOAD = re.compile(rb"(\$script:Payload\s*=\s*@'(?:\r\n|\n)?)(.*?)((?:\r\n|\n)?'@)", re.S)
 
 def die(msg):
@@ -48,6 +52,16 @@ def die(msg):
 
 def say(msg):
     print(f"==> {msg}")
+
+
+def stamp_version(data, pattern, fmt, version):
+    """Ganti nomor versi di template. Tanpa versi (build lokal) template dibiarkan apa adanya."""
+    if not version:
+        return data
+    new, n = pattern.subn(lambda _: fmt.format(version).encode(), data, count=1)
+    if n != 1:
+        die("baris versi tidak ditemukan di template installer")
+    return new
 
 
 def payload_files(with_ico):
@@ -97,18 +111,19 @@ def wrap64(data, eol):
     return eol.join(b[i:i + 76] for i in range(0, len(b), 76))
 
 
-def build_sh(out_dir):
+def build_sh(out_dir, version=""):
     tpl = SH_TEMPLATE.read_bytes()
     if tpl.count(SH_MARK) != 1:
         die(f"penanda __ARCHIVE__ harus tepat satu kali di {SH_TEMPLATE.name}")
     head = tpl[: tpl.index(SH_MARK) + len(SH_MARK)]       # buang payload lama bila ada
+    head = stamp_version(head, SH_VERSION, 'VERSION="{}"', version)
     out = out_dir / SH_TEMPLATE.name
     out.write_bytes(head + wrap64(make_targz(payload_files(with_ico=False)), b"\n") + b"\n")
     out.chmod(0o755)
     return out
 
 
-def build_ps1(out_dir):
+def build_ps1(out_dir, version=""):
     tpl_bytes = PS1_TEMPLATE.read_bytes()
     
     # Cari pola payload secara fleksibel tanpa terikat line-ending yang kaku
@@ -128,6 +143,7 @@ def build_ps1(out_dir):
     
     # Rakit ulang file ps1 dengan payload baru di tengahnya
     new_ps1_bytes = tpl_bytes[:start_idx] + b"\r\n" + body + b"\r\n" + tpl_bytes[end_idx:]
+    new_ps1_bytes = stamp_version(new_ps1_bytes, PS1_VERSION, '$Version = "{}"', version)
     
     out = out_dir / PS1_TEMPLATE.name
     out.write_bytes(new_ps1_bytes)
@@ -162,6 +178,9 @@ def verify(sh, ps1):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", default=str(ROOT / "dist"), help="folder hasil (bawaan: dist/)")
+    ap.add_argument("--version", default=os.environ.get("SENANDUNG_VERSION", ""),
+                    help="nomor versi untuk installer (mis. 1.2; awalan 'v' dibuang). "
+                         "Bawaan: env SENANDUNG_VERSION, atau biarkan seperti di template")
     ap.add_argument("--no-verify", action="store_true", help="lewati verifikasi payload")
     args = ap.parse_args()
 
@@ -171,12 +190,17 @@ def main():
         except py_compile.PyCompileError as e:
             die(f"senandung.py bermasalah, installer tidak dibuat:\n{e}")
 
+    version = args.version.strip().lstrip("vV")
+    if version and not VERSION_OK.fullmatch(version):
+        die(f"nomor versi tidak valid: {args.version!r}")
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    sh, ps1 = build_sh(out_dir), build_ps1(out_dir)
+    sh, ps1 = build_sh(out_dir, version), build_ps1(out_dir, version)
     if not args.no_verify:
         verify(sh, ps1)
 
+    if version:
+        say(f"versi installer: {version}")
     sums = []
     for f in (sh, ps1):
         h = hashlib.sha256(f.read_bytes()).hexdigest()
