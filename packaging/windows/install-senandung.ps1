@@ -248,6 +248,8 @@ function Do-Install {
         ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
       $mb = [math]::Round(((Get-ChildItem $ExeDir -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB, 1)
       Say (T exe_size $mb)
+      # exe sudah mandiri: buang venv dan cache build (ratusan MB)
+      Remove-Item -Recurse -Force $Venv, (Join-Path $Prefix "build") -ErrorAction SilentlyContinue
     }
     else { Warn (T exe_failed) }
   }
@@ -269,7 +271,7 @@ function Do-Install {
   Say (T done $Version)
   Write-Host ""
   Write-Host (T run_hint)
-  Write-Host ((T preview_lbl) + "`"$Pyw`" `"$Script`" --demo")
+  if (Test-Path -LiteralPath $Pyw) { Write-Host ((T preview_lbl) + "`"$Pyw`" `"$Script`" --demo") }
   Write-Host (T close_hint)
   Write-Host ((T uninstall_lbl) + "Settings > Apps > Senandung,  or:  powershell -ExecutionPolicy Bypass -File `"$UnPs1`" -Uninstall")
   Write-Host ((T log_lbl) + "$env:LOCALAPPDATA\senandung.log")

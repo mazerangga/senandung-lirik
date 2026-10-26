@@ -284,7 +284,41 @@ def lrc_name(artist, title):
     return n + ".lrc"
 
 
-from romanize import NON_LATIN, ROMAN_VERSION, romanize_lines  # noqa: E402  (paket romanize/)
+from romanize import NON_LATIN, ROMAN_VERSION  # noqa: E402  (paket romanize/)
+from romanize import romanize_lines as _romanize_inproc  # noqa: E402
+
+
+def romanize_lines(lines):
+    """Romanisasi di proses anak sekali-pakai. pykakasi (~100 MB) dan pypinyin (~50 MB) memuat
+    kamus besar yang tidak pernah dilepas ke OS; dengan proses anak, memori kembali begitu selesai.
+    Hasilnya sudah di-cache ke berkas .romaji.vN.lrc, jadi biaya start proses hanya sekali per lagu."""
+    import subprocess
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--romanize-worker"]
+    else:
+        cmd = [sys.executable, str(Path(__file__).resolve()), "--romanize-worker"]
+    kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}   # CREATE_NO_WINDOW
+    try:
+        r = subprocess.run(cmd, input=json.dumps(lines).encode("utf-8"), capture_output=True,
+                           timeout=120, **kw)
+        if r.returncode == 0:
+            res = json.loads(r.stdout.decode("utf-8"))
+            if isinstance(res, list) and len(res) == len(lines):
+                return res
+        print(f"[senandung] romanize worker failed (rc={r.returncode}): "
+              f"{r.stderr.decode('utf-8', 'replace')[-300:]}", file=sys.stderr)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        print(f"[senandung] romanize worker error: {e}", file=sys.stderr)
+    return _romanize_inproc(lines)            # cadangan: di proses utama (lebih boros memori)
+
+
+def _romanize_worker():
+    """Mode --romanize-worker: baca JSON list[str] dari stdin, tulis JSON list[str] ke stdout."""
+    fin = open(0, "rb", closefd=False)        # fd langsung: sys.stdin/stdout bisa None di exe --windowed
+    fout = open(1, "wb", closefd=False)
+    lines = json.loads(fin.read().decode("utf-8"))
+    fout.write(json.dumps(_romanize_inproc(lines), ensure_ascii=False).encode("utf-8"))
+    fout.flush()
 
 
 def romaji_name(lrc_filename):
@@ -1799,6 +1833,9 @@ def load_tray_icon(fallback):
 
 def main():
     argv = sys.argv[1:]
+    if "--romanize-worker" in argv:                 # proses anak untuk romanisasi (lihat romanize_lines)
+        _romanize_worker()
+        return
     set_language(Cfg().get("language"))             # bahasa tersimpan, atau ikut sistem
     if "--make-icon" in argv:                       # dipakai installer Windows untuk membuat .ico
         i = argv.index("--make-icon")

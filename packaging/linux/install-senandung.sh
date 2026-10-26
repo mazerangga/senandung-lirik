@@ -19,7 +19,7 @@ APPS_DIR="$DATA/applications"
 HICOLOR="$DATA/icons/hicolor"
 ICON_DIR="$HICOLOR/scalable/apps"      # only to clean up the svg icon of old versions
 AUTOSTART_DIR="$CONF/autostart"
-PIP_PKGS=(PySide6 pykakasi pypinyin korean-romanizer unidecode)
+PIP_PKGS=(PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode)
 
 # ------------------------------------------------------------------ language / bahasa
 # Pilihan: --lang id|en  >  SENANDUNG_LANG  >  bahasa sistem (LC_ALL / LC_MESSAGES / LANG)
@@ -60,7 +60,7 @@ T() {   # T kunci [argumen...]  -> teks sesuai bahasa (pakai printf, placeholder
       no_icons)      s='folder ikon (assets/icons/png) tidak ada di arsip.' ;;
       make_venv)     s='Membuat lingkungan Python di %s' ;;
       venv_failed)   s='Gagal membuat venv (Debian/Ubuntu: pasang python3-venv).' ;;
-      dl_mods)       s='Mengunduh modul (PySide6 dll., sekitar 200 MB; mohon tunggu)' ;;
+      dl_mods)       s='Mengunduh modul (PySide6-Essentials dll., sekitar 100 MB; mohon tunggu)' ;;
       pip_failed)    s='pip gagal mengunduh modul. Periksa koneksi internet lalu jalankan installer lagi.' ;;
       import_failed) s='Modul Python terpasang tetapi tidak bisa diimpor.' ;;
       ask_autostart) s='Jalankan otomatis saat login?' ;;
@@ -92,7 +92,7 @@ T() {   # T kunci [argumen...]  -> teks sesuai bahasa (pakai printf, placeholder
       no_icons)      s='the icon folder (assets/icons/png) is missing from the archive.' ;;
       make_venv)     s='Creating Python environment in %s' ;;
       venv_failed)   s='Could not create the venv (Debian/Ubuntu: install python3-venv).' ;;
-      dl_mods)       s='Downloading modules (PySide6 etc., about 200 MB; please wait)' ;;
+      dl_mods)       s='Downloading modules (PySide6-Essentials etc., about 100 MB; please wait)' ;;
       pip_failed)    s='pip failed to download the modules. Check your internet connection and run the installer again.' ;;
       import_failed) s='The Python modules installed but cannot be imported.' ;;
       ask_autostart) s='Start automatically at login?' ;;
