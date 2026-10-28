@@ -37,6 +37,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from PySide6.QtCore import QLocale, QObject, QPointF, QProcess, QRectF, QSettings, Qt, QTimer, QUrl, Signal
@@ -391,12 +392,13 @@ def _romanize_worker():
 
 def romaji_name(lrc_filename):
     """Nama file cache romanisasi; memuat ROMAN_VERSION supaya cache lama otomatis tidak dipakai."""
-    return lrc_filename.replace(".lrc", f".romaji.v{ROMAN_VERSION}.lrc")
+    stem = lrc_filename[:-4] if lrc_filename.lower().endswith(".lrc") else lrc_filename   # hanya akhiran, bukan semua '.lrc'
+    return f"{stem}.romaji.v{ROMAN_VERSION}.lrc"
 
 
-def http_json(url):
+def http_json(url, timeout=15):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
@@ -528,18 +530,42 @@ class SelfUpdater(QObject):
 
 
 
+# Kata penanda "bukan bagian judul asli" di dalam tanda kurung: (feat. X), (Live), (2011 Remaster), ...
+_NOISE_RX = re.compile(r"\b(?:feat|ft|featuring|with|live|remaster\w*|remix|mix|edit|version|ver|mono|stereo|"
+                       r"single|radio|explicit|acoustic|instrumental|demo|deluxe|bonus|from|cover|karaoke|"
+                       r"official|lyrics?|audio|video)\b|\b\d{4}\b", re.IGNORECASE)
+
+
+def _strip_group(m):
+    """[...] dan 【...】 hampir selalu label; (...) hanya dibuang bila isinya kata penanda di atas,
+    supaya judul seperti '(Don't Fear) The Reaper' atau 'Love Me (Like You Do)' tetap utuh."""
+    g = m.group(0)
+    return " " if g[0] in "[【" or _NOISE_RX.search(g) else g
+
+
 def _clean_title(title):
     """Buang bagian yang sering membuat pencarian gagal: (feat. ...), [Live], - Remastered, dll."""
-    t = re.sub(r"[\(\[（【][^\)\]）】]*[\)\]）】]", " ", title)
+    t = re.sub(r"\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）", _strip_group, title)
     t = re.sub(r"\s+[-–—]\s+(remaster\w*|live|ver\w*|mono|stereo|single|radio|explicit|from)\b.*$", "",
                t, flags=re.IGNORECASE)
     t = re.sub(r"\s+(feat|ft)\.?\s.*$", "", t, flags=re.IGNORECASE)
     return re.sub(r"\s+", " ", t).strip() or title
 
 
+# Nama grup yang memuat koma; tanpa daftar ini 'Earth, Wind & Fire' terpotong jadi 'Earth'.
+_ARTIST_KEEP = ("earth, wind & fire", "earth, wind and fire", "emerson, lake & palmer", "blood, sweat & tears",
+                "peter, paul and mary", "crosby, stills, nash", "crosby, stills & nash")
+
+
 def _first_artist(artist):
-    """Artis pertama saja: 'A, B' / 'A & B' / 'A feat. B' -> 'A'."""
-    a = re.split(r"\s*(?:,|;|/|&|\bfeat\.?|\bft\.?|、|，)\s*", artist, maxsplit=1, flags=re.IGNORECASE)[0]
+    """Artis pertama saja untuk pencarian cadangan: 'A, B' / 'A; B' / 'A feat. B' / 'A / B' -> 'A'.
+    '&' dan '/' tanpa spasi TIDAK memisahkan, karena 'AC/DC' dan 'Simon & Garfunkel' satu nama."""
+    low = artist.lower()
+    for keep in _ARTIST_KEEP:
+        if low.startswith(keep):
+            return artist[:len(keep)].strip()
+    a = re.split(r"\s*(?:;|、|，|\s/\s|\s+(?:feat|ft|featuring)\b\.?|,(?!\s*the\b))\s*", artist, maxsplit=1,
+                 flags=re.IGNORECASE)[0]
     return a.strip() or artist
 
 
@@ -557,10 +583,17 @@ def _plain(text):
 HAN_RX = re.compile("[\u3400-\u4dbf\u4e00-\u9fff]")
 
 
+def _title_close(it, want):
+    """Judul hasil pencarian sama dengan, atau memuat/dimuat oleh, judul yang dicari (sudah dinormalkan)."""
+    t = _plain(it.get("trackName") or "")
+    return bool(want and t and (t == want or (len(want) >= 4 and (want in t or t in want))))
+
+
 def _pick_synced(items, title, duration_s, loose=False):
     """Pilih lirik tersinkron terbaik dari hasil pencarian LRCLIB.
     Urutan: judul sama (pinyin dihitung sama) + durasi cocok -> durasi cocok (<=4 dtk)
-    -> bila loose, hasil pertama."""
+    -> bila loose, hasil yang judulnya mirip dan durasinya <=10 dtk (atau durasi tak diketahui).
+    Hasil pertama TIDAK lagi diambil begitu saja: lirik lagu lain lebih buruk daripada tanpa lirik."""
     items = [it for it in items if it.get("syncedLyrics")]
     if not items:
         return None
@@ -575,7 +608,11 @@ def _pick_synced(items, title, duration_s, loose=False):
         pool = sorted(pool, key=dd)
         if pool and (dd(pool[0]) <= 4 or (pool is same and duration_s <= 0)):
             return pool[0]["syncedLyrics"]
-    return items[0]["syncedLyrics"] if loose else None
+    if loose:
+        for it in sorted(items, key=dd):
+            if _title_close(it, want) and (duration_s <= 0 or dd(it) <= 10):
+                return it["syncedLyrics"]
+    return None
 
 
 _meta_cache = {}
@@ -633,6 +670,34 @@ def find_song_lrc(path, artist, title):
         return None
 
 
+_dir_index = {}
+
+
+def _lrc_index(folder):
+    """Daftar .lrc di folder beserta tag [ar:]/[ti:] yang sudah dinormalkan. Dibangun ulang hanya bila
+    folder berubah (mtime atau jumlah isi), supaya mencari lirik tidak membaca ulang ribuan file
+    setiap ganti lagu. Baris: (file, artis_pertama, artis_penuh, artis_ascii, nama_file, judul_di_file)."""
+    try:
+        key = (folder.stat().st_mtime_ns, len(os.listdir(folder)))
+    except OSError:
+        return []
+    hit = _dir_index.get(folder)
+    if hit and hit[0] == key:
+        return hit[1]
+    rows = []
+    try:
+        for f in folder.glob("*.lrc"):
+            if ".romaji" in f.name.lower():
+                continue
+            m_ar, m_ti = lrc_meta(f)
+            rows.append((f, _plain(_first_artist(m_ar)), _plain(m_ar), not re.search(r"[^\x00-\x7f]", m_ar),
+                         _plain(f.stem), _plain(_clean_title(m_ti)) if m_ti else ""))
+    except OSError:
+        return []
+    _dir_index[folder] = (key, rows)
+    return rows
+
+
 def resolve_lrc(folder, artist, title):
     """File .lrc lokal untuk lagu ini. Urutan: nama persis 'Artis - Judul.lrc'; kalau tidak ada,
     cari di folder berdasarkan nama file DAN tag [ar:]/[ti:] di dalam file (huruf besar/kecil,
@@ -641,22 +706,17 @@ def resolve_lrc(folder, artist, title):
     exact = folder / lrc_name(artist, title)
     if exact.exists():
         return exact
-    try:
-        files = [f for f in folder.glob("*.lrc") if ".romaji" not in f.name.lower()]
-    except OSError:
-        return exact
     ct, ca, pa_full = _plain(_clean_title(title)), _plain(_first_artist(artist)), _plain(artist)
-    if not files or not ct:
+    rows = _lrc_index(folder)
+    if not rows or not ct:
         return exact
+    artist_ascii = not re.search(r"[^\x00-\x7f]", artist)
     best, best_score = None, 0.0
-    for f in files:
-        m_ar, m_ti = lrc_meta(f)
-        ar_first, ar_full = _plain(_first_artist(m_ar)), _plain(m_ar)
+    for f, ar_first, ar_full, ar_ascii, st, mt in rows:
         artist_ok = bool((ca and ar_full and ca in ar_full) or (ar_first and pa_full and ar_first in pa_full))
-        comparable = not (re.search(r"[^\x00-\x7f]", m_ar) or re.search(r"[^\x00-\x7f]", artist))
+        comparable = ar_ascii and artist_ascii
         if comparable and ar_full and ca and not artist_ok:
             continue          # file menyebut artis lain (sama-sama huruf Latin): bukan lagu ini
-        st, mt = _plain(f.stem), _plain(_clean_title(m_ti)) if m_ti else ""
         if st in (ca + ct, ct + ca):
             score = 3.0
         elif mt and mt == ct:
@@ -669,27 +729,56 @@ def resolve_lrc(folder, artist, title):
             continue
         if artist_ok:
             score += 0.7                               # artis di dalam file ikut cocok
-        if score > best_score or (score == best_score and best and f.stat().st_mtime > best.stat().st_mtime):
+        if score > best_score or (score == best_score and best and _mtime(f) > _mtime(best)):
             best, best_score = f, score
     return best or exact
 
 
-def fetch_online(artist, title, duration_s):
+def _mtime(f):
+    try:
+        return f.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+FETCH_DEADLINE_S = 25        # batas total satu pencarian lirik (dulu bisa 6 request x 15 dtk berurutan)
+
+
+def _lrclib_json(url, deadline, errors):
+    """GET JSON dari LRCLIB. None bila tidak ada (404 itu wajar, bukan galat) atau gagal; kegagalan
+    jaringan/server dihitung di errors[0] supaya pemanggil tahu hasil kosongnya mungkin sementara."""
+    left = deadline - time.monotonic()
+    if left <= 1:
+        errors[0] += 1
+        return None
+    try:
+        return http_json(url, timeout=min(10, left))
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            errors[0] += 1
+            print(f"[senandung] LRCLIB: HTTP {e.code}", file=sys.stderr)
+    except Exception as e:
+        errors[0] += 1
+        print(f"[senandung] LRCLIB: {e}", file=sys.stderr)
+    return None
+
+
+def _fetch_online(artist, title, duration_s):
+    """(teks .lrc atau None, jumlah galat jaringan). Galat > 0 berarti 'tidak ketemu' belum pasti."""
     base = "https://lrclib.net/api/"
     ctitle, cartist = _clean_title(title), _first_artist(artist)
+    deadline, errors = time.monotonic() + FETCH_DEADLINE_S, [0]
 
     # 1. cocok persis (get): nama asli, lalu nama yang sudah dibersihkan
     for a, t in dict.fromkeys([(artist, title), (cartist, ctitle)]):
         q = urllib.parse.urlencode({"artist_name": a, "track_name": t})
-        try:
-            res = http_json(f"{base}get?{q}" + (f"&duration={duration_s}" if duration_s > 0 else ""))
-            if res.get("syncedLyrics"):
-                return res["syncedLyrics"]
-        except Exception as e:
-            print(f"[senandung] LRCLIB get: {e}", file=sys.stderr)
+        res = _lrclib_json(f"{base}get?{q}" + (f"&duration={duration_s}" if duration_s > 0 else ""),
+                           deadline, errors)
+        if res and res.get("syncedLyrics"):
+            return res["syncedLyrics"], errors[0]
 
-    # 2. pencarian: artis+judul dulu (hasil pertama boleh dipakai), lalu teks bebas
-    #    (hasil harus cocok judulnya atau durasinya, supaya tidak salah lagu)
+    # 2. pencarian: artis+judul dulu (hasil harus mirip judulnya dan durasinya), lalu teks bebas
+    #    (hasil harus cocok persis judul atau durasinya, supaya tidak salah lagu)
     tries = [({"artist_name": artist, "track_name": title}, True),
              ({"artist_name": cartist, "track_name": ctitle}, True),
              ({"q": f"{cartist} {ctitle}"}, False),
@@ -700,15 +789,15 @@ def fetch_online(artist, title, duration_s):
         if key in seen:
             continue
         seen.add(key)
-        try:
-            found = _pick_synced(http_json(f"{base}search?" + urllib.parse.urlencode(params)),
-                                 ctitle, duration_s, loose)
-        except Exception as e:
-            print(f"[senandung] LRCLIB search: {e}", file=sys.stderr)
-            continue
+        items = _lrclib_json(f"{base}search?" + urllib.parse.urlencode(params), deadline, errors)
+        found = _pick_synced(items, ctitle, duration_s, loose) if isinstance(items, list) else None
         if found:
-            return found
-    return None
+            return found, errors[0]
+    return None, errors[0]
+
+
+def fetch_online(artist, title, duration_s):
+    return _fetch_online(artist, title, duration_s)[0]
 
 
 def read_text_file(path):
@@ -746,8 +835,19 @@ def search_lrclib(artist, title):
     return out[:40]
 
 
+@dataclass
+class LyricsResult:
+    """Hasil memuat lirik satu lagu."""
+    entries: list = field(default_factory=list)   # [{t, text, roman}]
+    offset: int = 0                               # tag [offset:N] dari file .lrc (ms)
+    transient: bool = False                       # kosong karena galat jaringan: jangan di-cache sebagai 'tidak ada'
+
+
+_OFFSET_RX = re.compile(r"\[offset:\s*([+-]?\d+)\s*\]", re.IGNORECASE)
+
+
 def load_lyrics(artist, title, duration_s, cfg, path=""):
-    """Dijalankan di thread terpisah. Mengembalikan list dict {t, text, roman}."""
+    """Dijalankan di thread terpisah. Mengembalikan LyricsResult."""
     folder = Path(os.path.expanduser(cfg["lyrics_dir"]))
     name = lrc_name(artist, title)
     lrc = folder / name                       # nama baku untuk menyimpan hasil unduhan
@@ -757,27 +857,20 @@ def load_lyrics(artist, title, duration_s, cfg, path=""):
     song_lrc = find_song_lrc(path, artist, title)
     if song_lrc and (not found.exists() or song_lrc.stat().st_mtime > found.stat().st_mtime):
         found = song_lrc
-    parsed = []
-    
-    # 1. Siapkan wadah untuk teks lirik mentah dan nilai offset
-    raw_text = ""      
-    offset_val = 0     
+    parsed, raw_text, net_errors = [], "", 0
 
     if found.exists():
-        # 2. Tampung ke raw_text dulu agar bisa di-regex nanti
         raw_text = read_text_file(found)
         parsed = parse_lrc(raw_text)
         if parsed:
             print(f"[senandung] lyrics loaded from local file: {found.name}")
         else:
             print(f"[senandung] local file has no timestamped lines: {found.name}", file=sys.stderr)
-            
+
     if not parsed:
-        # 3. Tampung hasil online ke raw_text
-        fetched = fetch_online(artist, title, duration_s)
-        raw_text = fetched if fetched else ""
+        fetched, net_errors = _fetch_online(artist, title, duration_s)
+        raw_text = fetched or ""
         parsed = parse_lrc(raw_text) if raw_text else []
-        
         print(f"[senandung] LRCLIB: {len(parsed)} lines for {artist} - {title}")
         if parsed and cfg["save_local"]:
             try:
@@ -786,45 +879,40 @@ def load_lyrics(artist, title, duration_s, cfg, path=""):
             except OSError as e:
                 print(f"[senandung] failed to save: {e}", file=sys.stderr)
 
-    # 4. Cari tag offset dari teks mentah (lokal maupun online)
-    if raw_text:
-        offset_match = re.search(r'\[offset:([+-]?\d+)\]', raw_text, re.IGNORECASE)
-        offset_val = int(offset_match.group(1)) if offset_match else 0
-
+    m = _OFFSET_RX.search(raw_text) if raw_text else None
     entries = [{"t": t, "text": x, "roman": ""} for t, x in parsed]
+    res = LyricsResult(entries, int(m.group(1)) if m else 0, transient=not entries and net_errors > 0)
 
-    # 5. Titipkan nilai offset ke baris lirik pertama sebagai metadata rahasia
-    if entries:
-        entries[0]["_offset"] = offset_val
-
-    # --- Sisa kode romaji di bawah ini tidak berubah ---
     if entries and cfg["romaji"] != "off" and any(NON_LATIN.search(e["text"]) for e in entries):
         rfile = folder / romaji_name(name)
         done = False
         if cfg["save_local"] and rfile.exists():
-            rl = parse_lrc(rfile.read_text("utf-8", errors="replace"))
+            try:
+                rl = parse_lrc(rfile.read_text("utf-8", errors="replace"))
+            except OSError as e:                   # cache romanisasi rusak/terkunci: buat ulang, jangan buang lirik
+                print(f"[senandung] cannot read romanization cache: {e}", file=sys.stderr)
+                rl = []
             if len(rl) == len(entries) and all(abs(a["t"] - b[0]) <= 30 for a, b in zip(entries, rl)):
                 for e, (_, r) in zip(entries, rl):
                     e["roman"] = "" if r == e["text"] else r
                 done = True
                 print("[senandung] romanization loaded from local file")
         if not done:
-            res = romanize_lines([e["text"] for e in entries])
-            for e, r in zip(entries, res):
+            roman = romanize_lines([e["text"] for e in entries])
+            for e, r in zip(entries, roman):
                 e["roman"] = r
-            if any(res) and cfg["save_local"]:
+            if any(roman) and cfg["save_local"]:
                 try:
                     rows = [fmt_time(e["t"]) + (e["roman"] or e["text"]) for e in entries]
                     folder.mkdir(parents=True, exist_ok=True)
                     rfile.write_text("\n".join(rows) + "\n", "utf-8")
                 except OSError as e:
                     print(f"[senandung] failed to save romanization: {e}", file=sys.stderr)
-                    
-    return entries
+    return res
 
 
 class Loader(QObject):
-    done = Signal(str, object)
+    done = Signal(str, object)           # (key, LyricsResult)
 
     def load(self, key, artist, title, duration_s, cfg, path=""):
         def run():
@@ -832,7 +920,7 @@ class Loader(QObject):
                 self.done.emit(key, load_lyrics(artist, title, duration_s, cfg, path))
             except Exception as e:  # jangan sampai thread mati diam-diam
                 print(f"[senandung] failed to load lyrics: {e}", file=sys.stderr)
-                self.done.emit(key, [])
+                self.done.emit(key, LyricsResult(transient=True))
         threading.Thread(target=run, daemon=True).start()
 
 
@@ -914,6 +1002,7 @@ TICK_BUSY_MS = 50                            # lagu main / scroll bergerak (~20 
 TICK_IDLE_MS = 150                           # diam (dijeda / tanpa animasi)
 TICK_HIDDEN_MS = 250                         # jendela disembunyikan ke tray: tidak ada yang digambar
 FILL_CACHE_BYTES = 24 * 1024 * 1024          # batas memori cache isian teks (pixmap)
+MISS_TTL_S = 600                             # lagu tanpa lirik tidak dicari ulang selama ini (kecuali diminta)
 TOOLBAR = ["prev", "play", "next", "mode", "lock", "gear", "close"]
 # Tema siap pakai di Pengaturan: mengisi warna & latar sekaligus (belum disimpan sampai menekan OK)
 THEMES = {
@@ -969,6 +1058,7 @@ class OSD(QWidget):
         self._fill_bytes = 0
         self.track_key = ""
         self.last_key = ""
+        self.misses = {}                 # key lagu -> waktu (monotonic) terakhir dipastikan tak ada liriknya
         self.note = ""
         self.play_state = ""
         self.player_name = ""
@@ -1072,6 +1162,7 @@ class OSD(QWidget):
         if self.s["on_top"] != old_top:
             self._reflag()
         self.track_key = ""          # paksa muat ulang lirik (romaji/folder bisa berubah)
+        self.misses.clear()
         self.update()
 
     def start_update_check(self):
@@ -1125,6 +1216,7 @@ class OSD(QWidget):
         except OSError as e:
             self.say(tr("save_failed", err=e), 3.0)
             return False
+        self.misses.pop(f"{cur['artist']}|{cur['title']}", None)
         if f"{cur['artist']}|{cur['title']}" == self.track_key:
             self.track_key = ""                   # paksa muat ulang dari file lokal
             self.note = tr("loading")
@@ -1249,19 +1341,28 @@ class OSD(QWidget):
             if not title.strip():
                 self.note = ""
                 return
-            self.note = tr("searching")
             print(f"[senandung] track: {artist} - {title}")
+            missed = self.misses.get(key)
+            if missed is not None and time.monotonic() - missed < MISS_TTL_S:
+                self.note = tr("not_found")          # baru saja dicari dan tidak ada: jangan hubungi jaringan lagi
+                return
+            self.note = tr("searching")
             self.loader.load(key, artist, title, info["length"], self.s, info.get("path", ""))
 
-    def on_lyrics(self, key, entries):
+    def on_lyrics(self, key, res):
         if key != self.track_key:
             return
+        entries = res.entries
+        if entries or res.transient:
+            self.misses.pop(key, None)
+        else:
+            self.misses[key] = time.monotonic()
         self.lyrics = entries
         self.times = [e["t"] for e in entries]
         self.idx, self.scroll = -1, 0.0
         self.note = "" if entries else tr("not_found")
         # offset per lagu dibaca dari tag [offset:N] di file .lrc (lihat load_lyrics)
-        self.local_offset = entries[0].get("_offset", 0) if entries else 0
+        self.local_offset = res.offset if entries else 0
 
     # ---- waktu
     def pos_ms(self):
