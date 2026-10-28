@@ -14,10 +14,12 @@ from .chinese import romanize_zh
 from .generic import romanize_generic
 from .japanese import romanize_ja
 from .korean import romanize_ko
-from .scripts import ARABIC, HAN, HANGUL, KANA, NON_LATIN, OTHER  # noqa: F401 (NON_LATIN dipakai pemanggil)
+from .scripts import ARABIC, HAN, HANGUL, KANA, NON_LATIN, OTHER
+
+__all__ = ["NON_LATIN", "ROMAN_VERSION", "romanize_lines"]    # NON_LATIN dan ROMAN_VERSION dipakai senandung.py
 
 # Naikkan angka ini setiap hasil romanisasi berubah, supaya cache lama (*.romaji.vN.lrc) tidak dipakai lagi.
-ROMAN_VERSION = 4
+ROMAN_VERSION = 5
 
 
 def romanize_lines(lines):
@@ -27,10 +29,10 @@ def romanize_lines(lines):
     for t in lines:
         if KANA.search(t):
             out.append(romanize_ja(t))
-        elif HAN.search(t):
-            out.append(romanize_ja(t) if song_ja else romanize_zh(t))
-        elif HANGUL.search(t):
+        elif HANGUL.search(t):                      # sebelum HAN: baris hangul+hanja tetap dibaca sebagai Korea
             out.append(romanize_ko(t))
+        elif HAN.search(t):
+            out.append((romanize_ja(t) or romanize_zh(t)) if song_ja else romanize_zh(t))
         elif ARABIC.search(t):                      # Arab: biarkan aksara aslinya (jangan ke unidecode)
             out.append("")
         elif OTHER.search(t):
