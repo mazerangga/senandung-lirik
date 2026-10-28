@@ -285,7 +285,7 @@ senandung-lirik/
 ├── players/                       # backend pemutar
 │   ├── __init__.py                # make_backend(): memilih backend sesuai OS
 │   ├── common.py                  # penanda platform, urutan prioritas / blacklist
-│   ├── linux.py                   # playerctl + D-Bus (MPRIS)
+│   ├── linux.py                   # playerctl (MPRIS)
 │   ├── windows.py                 # Windows Media Session (SMTC)
 │   └── aimp.py                    # AIMP Remote API
 ├── .github/workflows/release.yml  # rilis otomatis saat tag v* di-push

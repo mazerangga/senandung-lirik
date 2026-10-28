@@ -2,6 +2,7 @@
 import asyncio
 import sys
 import threading
+import time
 
 from PySide6.QtCore import QObject, Signal
 
@@ -45,11 +46,18 @@ class WinBackend(QObject):
             mgr = await Manager.request_async()
         except Exception as e:                   # tanpa winrt tetap bisa membaca AIMP
             print(f"[senandung] winrt module not available: {e}", file=sys.stderr)
+        last_msg, last_log = "", 0.0
         while not self._stop:
             try:
                 self.updated.emit(await self.poll(mgr))
+                last_msg = ""
             except Exception as e:
-                print(f"[senandung] poll SMTC: {e}", file=sys.stderr)
+                # Galat yang sama berulang tiap 0,4 dtk akan membanjiri senandung.log: catat saat pesan baru
+                # muncul, lalu paling sering sekali per menit.
+                msg, now = str(e), time.monotonic()
+                if msg != last_msg or now - last_log > 60:
+                    print(f"[senandung] poll SMTC: {msg}", file=sys.stderr)
+                    last_msg, last_log = msg, now
             await asyncio.sleep(0.4)
 
     async def poll(self, mgr):

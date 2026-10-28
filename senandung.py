@@ -2461,7 +2461,13 @@ def main():
     if sys.stderr is None or sys.stdout is None:    # pythonw / exe tanpa konsol: tulis ke berkas log
         try:
             base = Path(os.environ.get("LOCALAPPDATA") or Path.home())
-            log = open(base / "senandung.log", "a", encoding="utf-8", buffering=1)
+            path = base / "senandung.log"
+            try:
+                if path.stat().st_size > 1_000_000:          # putar log: yang lama jadi senandung.log.1 (satu generasi)
+                    os.replace(path, path.with_name(path.name + ".1"))
+            except OSError:
+                pass
+            log = open(path, "a", encoding="utf-8", buffering=1)
             sys.stdout = sys.stderr = log
         except OSError:
             pass

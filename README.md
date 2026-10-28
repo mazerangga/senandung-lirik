@@ -285,7 +285,7 @@ senandung-lirik/
 ├── players/                       # player backends
 │   ├── __init__.py                # make_backend(): picks the backend for your OS
 │   ├── common.py                  # platform flags, priority / blacklist ranking
-│   ├── linux.py                   # playerctl + D-Bus (MPRIS)
+│   ├── linux.py                   # playerctl (MPRIS)
 │   ├── windows.py                 # Windows Media Session (SMTC)
 │   └── aimp.py                    # AIMP Remote API
 ├── .github/workflows/release.yml  # automated release when a v* tag is pushed
