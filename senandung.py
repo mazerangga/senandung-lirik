@@ -46,7 +46,7 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFontComboBox, QFormLayout, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QProgressBar, QPushButton,
-                               QSpinBox, QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
+                               QScrollArea, QSpinBox, QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
 
 APP_ID = "senandung"
 APP_VERSION = "dev"          # diisi otomatis dari tag rilis oleh tools/stamp_version.py (CI); "dev" = tanpa cek update
@@ -65,6 +65,10 @@ DEFAULTS = {
     "kara_color": "",           # warna isi karaoke; kosong = ikut hl_color
     "line_spacing": 100,        # jarak antar baris, persen (100 = bawaan)
     "outline": True,
+    "outline_width": 100,        # tebal garis tepi, persen (100 = bawaan)
+    "bg_color": "#000000",       # warna pelat latar di belakang lirik
+    "bg_opacity": 0,             # persen; 0 = tanpa pelat (bawaan: teks langsung di atas desktop), maks 90
+    "toolbar_scale": 100,        # ukuran toolbar & ikon, persen
     "wipe": True,                # efek isi warna per baris (mode dua baris & baris aktif)
     "offset_ms": 0,
     "romaji": "romaji",          # off | romaji | both
@@ -194,6 +198,19 @@ STRINGS = {
                         "en": "Clear the karaoke color: use the highlight font color"},
     "lbl_line_spacing": {"id": "Jarak antar baris", "en": "Line spacing"},
     "outline": {"id": "Garis tepi teks", "en": "Text outline"},
+    "lbl_outline_w": {"id": "Tebal garis tepi", "en": "Outline thickness"},
+    "lbl_theme": {"id": "Tema", "en": "Theme"},
+    "theme_pick": {"id": "(pilih untuk mengisi warna)", "en": "(pick to fill in the colors)"},
+    "theme_default": {"id": "Bawaan (hijau)", "en": "Default (green)"},
+    "theme_contrast": {"id": "Kontras tinggi (wallpaper ramai)", "en": "High contrast (busy wallpaper)"},
+    "theme_neon": {"id": "Neon", "en": "Neon"},
+    "theme_warm": {"id": "Hangat", "en": "Warm"},
+    "theme_ice": {"id": "Biru es", "en": "Ice blue"},
+    "lbl_bg_color": {"id": "Warna latar lirik", "en": "Lyrics background color"},
+    "lbl_bg_opacity": {"id": "Kepekatan latar lirik", "en": "Lyrics background opacity"},
+    "bg_opacity_tip": {"id": "0 % = tanpa latar, teks langsung di atas desktop",
+                       "en": "0 % = no background, text drawn straight on the desktop"},
+    "lbl_tb_scale": {"id": "Ukuran toolbar", "en": "Toolbar size"},
     "gradient": {"id": "Teks gradien mengkilap", "en": "Glossy gradient text"},
     "wipe": {"id": "Efek isi warna per baris (karaoke)", "en": "Per-line color fill effect (karaoke)"},
     "on_top": {"id": "Selalu di atas jendela lain (keep above)",
@@ -888,6 +905,19 @@ TICK_IDLE_MS = 150                           # diam (dijeda / tanpa animasi)
 TICK_HIDDEN_MS = 250                         # jendela disembunyikan ke tray: tidak ada yang digambar
 FILL_CACHE_BYTES = 24 * 1024 * 1024          # batas memori cache isian teks (pixmap)
 TOOLBAR = ["prev", "play", "next", "mode", "lock", "gear", "close"]
+# Tema siap pakai di Pengaturan: mengisi warna & latar sekaligus (belum disimpan sampai menekan OK)
+THEMES = {
+    "default": dict(text_color="#ffffff", hl_color="#1ed760", kara_color="", bg_color="#000000",
+                    bg_opacity=0, outline=True, outline_width=100),
+    "contrast": dict(text_color="#ffffff", hl_color="#ffd93b", kara_color="", bg_color="#000000",
+                     bg_opacity=50, outline=True, outline_width=140),
+    "neon": dict(text_color="#e6fbff", hl_color="#00e5ff", kara_color="#ff4fd8", bg_color="#0a0a1f",
+                 bg_opacity=40, outline=True, outline_width=100),
+    "warm": dict(text_color="#fff1dc", hl_color="#ffb347", kara_color="", bg_color="#1f1208",
+                 bg_opacity=35, outline=True, outline_width=100),
+    "ice": dict(text_color="#eef6ff", hl_color="#7cc4ff", kara_color="", bg_color="#07131f",
+                bg_opacity=35, outline=True, outline_width=100),
+}
 
 
 class OSD(QWidget):
@@ -1295,7 +1325,7 @@ class OSD(QWidget):
         Dihitung sekali per (teks, font, ukuran, lebar) lalu dipakai ulang tiap frame.
         Cache LRU kecil: hasilnya memegang pixmap garis tepi."""
         key = (text, self.s["font_family"], round(font.pointSizeF(), 2), round(maxw),
-               self.devicePixelRatioF())
+               self.devicePixelRatioF(), self.s["outline_width"])
         g = self._glyph_cache.pop(key, None)         # pop + simpan lagi = tandai terbaru dipakai
         if g is None:
             fm = QFontMetricsF(font)
@@ -1313,10 +1343,18 @@ class OSD(QWidget):
         self._glyph_cache[key] = g
         return g
 
+    def _outline_pw(self, size):
+        """Tebal goresan garis tepi (piksel): bawaan size/7, dikali pengaturan 'Tebal garis tepi'."""
+        return max(1.0, max(2.0, size / 7) * self.s["outline_width"] / 100)
+
+    def _tb_h(self):
+        """Tinggi strip toolbar (ikut pengaturan ukuran toolbar)."""
+        return round(TB_H * self.s["toolbar_scale"] / 100)
+
     def _layer_geom(self, g):
         """Geometri pixmap lapisan teks (outline & isian memakai ukuran yang sama):
         (pad, base, lebar, tinggi) dalam piksel logis; base = garis dasar di dalam pixmap."""
-        pw = max(2.0, g["size"] / 7)
+        pw = self._outline_pw(g["size"])
         pad = int(pw) + 3
         base = int(g["asc"]) + 1 + pad
         return pad, base, int(g["w"]) + 2 * pad + 2, base + int(g["desc"]) + 1 + pad
@@ -1336,7 +1374,7 @@ class OSD(QWidget):
         """Garis tepi hitam dirender sekali ke pixmap. strokePath dengan antialiasing adalah
         bagian paling mahal (puluhan kali lipat addText); menempel pixmap hampir gratis."""
         if g["outline"] is None:
-            pw = max(2.0, g["size"] / 7)
+            pw = self._outline_pw(g["size"])
             pm, q = self._new_layer(g)
             q.strokePath(g["path"], QPen(QColor(0, 0, 0, 215), pw, Qt.PenStyle.SolidLine,
                                          Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
@@ -1406,12 +1444,13 @@ class OSD(QWidget):
 
     # ---- toolbar (tampil saat kursor di atas jendela)
     def _buttons(self):
-        bw, gap, extra = 24, 3, 10
+        k = self.s["toolbar_scale"] / 100
+        bw, gap, extra, th = 24 * k, 3 * k, 10 * k, self._tb_h()
         total = len(TOOLBAR) * bw + (len(TOOLBAR) - 1) * gap + extra
         x = (self.width() - total) / 2
         out = []
         for n in TOOLBAR:
-            out.append((n, QRectF(x, 3, bw, TB_H - 6)))
+            out.append((n, QRectF(x, 3, bw, th - 6)))
             x += bw + gap + (extra if n == "next" else 0)
         return out
 
@@ -1426,7 +1465,7 @@ class OSD(QWidget):
         first, last = rects[0][1], rects[-1][1]
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(20, 24, 31, 205))
-        p.drawRoundedRect(QRectF(first.left() - 7, 1, last.right() - first.left() + 14, TB_H - 2), 10, 10)
+        p.drawRoundedRect(QRectF(first.left() - 7, 1, last.right() - first.left() + 14, self._tb_h() - 2), 10, 10)
         for n, r in rects:
             if n == self.hover_btn:
                 p.setBrush(QColor(255, 255, 255, 50))
@@ -1434,6 +1473,16 @@ class OSD(QWidget):
             self._icon(p, n, r)
 
     def _icon(self, p, name, r):
+        k = self.s["toolbar_scale"] / 100                    # skala ikon di sekitar pusat tombol
+        c = r.center()
+        p.save()
+        p.translate(c)
+        p.scale(k, k)
+        p.translate(-c.x(), -c.y())
+        self._icon_raw(p, name, r)
+        p.restore()
+
+    def _icon_raw(self, p, name, r):
         cx, cy = r.center().x(), r.center().y()
         white = QColor(255, 255, 255, 235)
         p.setPen(QPen(white, 1.7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
@@ -1475,6 +1524,13 @@ class OSD(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        if self.s["bg_opacity"] > 0 and (self.lyrics or (self.note and self.track_key)):
+            bg = QColor(self.s["bg_color"])                  # pelat latar opsional agar teks terbaca di wallpaper ramai
+            bg.setAlphaF(min(0.9, self.s["bg_opacity"] / 100))
+            top = self._tb_h() - 4 if self.s["mode"] == "double" else 1   # mode dua baris: strip toolbar tetap bebas
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(self.rect().adjusted(1, top, -1, -1), 12, 12)
         if self.hover and not self.locked:
             p.setBrush(QColor(0, 0, 0, 80))
             p.setPen(QPen(QColor(255, 255, 255, 60), 1))
@@ -1489,7 +1545,7 @@ class OSD(QWidget):
             else:
                 self._paint_scroll(p)
         elif self.note and self.track_key:
-            self._draw(p, self.note, self.height() / 2 + (TB_H / 2 if self.s["mode"] == "double" else 0),
+            self._draw(p, self.note, self.height() / 2 + (self._tb_h() / 2 if self.s["mode"] == "double" else 0),
                        QColor("#ffffff"), 0.75, "center", 0.0, 0.6)
         if self.hover and not self.locked:
             self._draw_toolbar(p)
@@ -1517,7 +1573,7 @@ class OSD(QWidget):
     def _paint_double(self, p):
         """Gaya MiniLyrics: strip toolbar di atas, lalu dua baris bergantian (atas kiri,
         bawah kanan). Baris aktif terisi warna; baris berikutnya redup dan memudar masuk."""
-        top = TB_H
+        top = self._tb_h()
         slot_h = (self.height() - top) / 2
         fh = QFontMetricsF(self._font()).height()
         both = self.s["romaji"] == "both"
@@ -1684,7 +1740,14 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(tr("settings_title"))
         self.cfg = cfg
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)                    # form di area scroll: tetap muat di layar 768 px
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        page = QWidget()
+        form = QFormLayout(page)
+        scroll.setWidget(page)
+        outer.addWidget(scroll)
         self.lang = QComboBox()
         self.lang_keys = ["auto", "id", "en"]
         self.lang.addItems([tr("lang_auto"), "Bahasa Indonesia", "English"])   # nama bahasa tidak diterjemahkan
@@ -1700,7 +1763,7 @@ class SettingsDialog(QDialog):
         self.use_font.setChecked(bool(cfg.get("font_family")))
         self.size = QSpinBox(minimum=8, maximum=120, value=cfg.get("font_size"))
         self.colors = {}
-        for key in ("text_color", "hl_color", "kara_color"):
+        for key in ("text_color", "hl_color", "kara_color", "bg_color"):
             val = cfg.get(key)
             b = QPushButton(val or tr("kara_follow"))
             b.clicked.connect(lambda _=False, k=key, btn=b: self.pick(k, btn))
@@ -1718,6 +1781,17 @@ class SettingsDialog(QDialog):
         self.spacing = QSpinBox(minimum=60, maximum=200, singleStep=5, value=cfg.get("line_spacing"))
         self.spacing.setSuffix(" %")
         self.outline = QCheckBox(tr("outline"), checked=cfg.get("outline"))
+        self.outline_w = QSpinBox(minimum=50, maximum=250, singleStep=10, value=cfg.get("outline_width"))
+        self.outline_w.setSuffix(" %")
+        self.bg_op = QSpinBox(minimum=0, maximum=90, singleStep=5, value=cfg.get("bg_opacity"))
+        self.bg_op.setSuffix(" %")
+        self.bg_op.setToolTip(tr("bg_opacity_tip"))
+        self.tb_scale = QSpinBox(minimum=100, maximum=200, singleStep=10, value=cfg.get("toolbar_scale"))
+        self.tb_scale.setSuffix(" %")
+        self.theme = QComboBox()
+        self.theme_keys = [""] + list(THEMES)
+        self.theme.addItems([tr("theme_pick")] + [tr("theme_" + k) for k in THEMES])
+        self.theme.activated.connect(self._apply_theme)
         self.gradient = QCheckBox(tr("gradient"), checked=cfg.get("gradient"))
         self.wipe = QCheckBox(tr("wipe"), checked=cfg.get("wipe"))
         self.on_top = QCheckBox(tr("on_top"), checked=cfg.get("on_top"))
@@ -1744,10 +1818,14 @@ class SettingsDialog(QDialog):
         self.updates = QCheckBox(tr("check_updates"), checked=cfg.get("check_updates"))
         for label, w in ((tr("lbl_language"), self.lang), (tr("lbl_mode"), self.mode),
                          (tr("lbl_font"), self.font), ("", self.use_font),
-                         (tr("lbl_font_size"), self.size), (tr("lbl_text_color"), self.colors["text_color"][1]),
+                         (tr("lbl_font_size"), self.size), (tr("lbl_theme"), self.theme),
+                         (tr("lbl_text_color"), self.colors["text_color"][1]),
                          (tr("lbl_hl_color"), self.colors["hl_color"][1]),
                          (tr("lbl_kara_color"), kara_row),
                          (tr("lbl_line_spacing"), self.spacing), ("", self.outline),
+                         (tr("lbl_outline_w"), self.outline_w),
+                         (tr("lbl_bg_color"), self.colors["bg_color"][1]), (tr("lbl_bg_opacity"), self.bg_op),
+                         (tr("lbl_tb_scale"), self.tb_scale),
                          ("", self.gradient), ("", self.wipe), ("", self.on_top), ("", self.auto_show),
                          (tr("lbl_align"), self.align), (tr("lbl_romaji"), self.romaji),
                          (tr("lbl_offset"), self.offset), (tr("lbl_players"), self.players),
@@ -1757,7 +1835,26 @@ class SettingsDialog(QDialog):
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
-        form.addRow(bb)
+        outer.addWidget(bb)
+        avail = QGuiApplication.primaryScreen().availableGeometry().height()
+        self.resize(page.sizeHint().width() + 40, min(page.sizeHint().height() + 70, int(avail * 0.9)))
+
+    def _set_color(self, key, val):
+        btn = self.colors[key][1]
+        self.colors[key] = (val, btn)
+        btn.setText(val or tr("kara_follow"))
+        self._paint_btn(btn, val or self.colors["hl_color"][0])
+
+    def _apply_theme(self, i):
+        """Isi semua kontrol warna/latar dari tema terpilih (disimpan saat menekan OK)."""
+        if i <= 0:
+            return
+        t = THEMES[self.theme_keys[i]]
+        for k in ("hl_color", "kara_color", "text_color", "bg_color"):    # hl dulu: kara kosong ikut hl
+            self._set_color(k, t[k])
+        self.bg_op.setValue(t["bg_opacity"])
+        self.outline.setChecked(t["outline"])
+        self.outline_w.setValue(t["outline_width"])
 
     @staticmethod
     def _paint_btn(btn, color):
@@ -1791,6 +1888,9 @@ class SettingsDialog(QDialog):
             c.set(key, val)
         c.set("line_spacing", self.spacing.value())
         c.set("outline", self.outline.isChecked())
+        c.set("outline_width", self.outline_w.value())
+        c.set("bg_opacity", self.bg_op.value())
+        c.set("toolbar_scale", self.tb_scale.value())
         c.set("gradient", self.gradient.isChecked())
         c.set("wipe", self.wipe.isChecked())
         c.set("on_top", self.on_top.isChecked())

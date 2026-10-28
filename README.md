@@ -194,6 +194,13 @@ Open them from the right-click menu, **Settings…**. The most useful ones:
 
 You can also drop your own `.lrc` files into the lyrics folder; local files are always used before searching online.
 
+### Appearance (Settings)
+
+- **Theme**: ready-made colour sets (default green, high contrast, neon, warm, ice blue). Picking one only fills in the controls below; nothing is saved until you press OK.
+- **Outline thickness**: 50 to 250 % of the default text outline.
+- **Lyrics background colour / opacity**: an optional rounded plate behind the lyrics so text stays readable on busy wallpapers. 0 % (default) means no plate, same as before. In two-line mode the toolbar strip stays outside the plate.
+- **Toolbar size**: 100 to 200 % for the hover toolbar and its icons.
+
 ## Updates
 
 Open **About Senandung…** from the right-click or tray menu. It shows the description, the current version, **Check for updates** and **Update now**.

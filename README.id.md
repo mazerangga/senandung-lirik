@@ -194,6 +194,13 @@ Buka lewat menu klik kanan, **Pengaturan…**. Beberapa yang paling sering dipak
 
 Kamu juga bisa menaruh `.lrc` buatan sendiri di folder lirik; berkas lokal selalu dipakai lebih dulu sebelum mencari online.
 
+### Tampilan (Pengaturan)
+
+- **Tema**: set warna siap pakai (hijau bawaan, kontras tinggi, neon, hangat, biru es). Memilih tema hanya mengisi kontrol di bawahnya; belum disimpan sampai Anda menekan OK.
+- **Tebal garis tepi**: 50 sampai 250 % dari garis tepi teks bawaan.
+- **Warna / kepekatan latar lirik**: pelat latar membulat opsional di belakang lirik agar teks tetap terbaca di wallpaper ramai. 0 % (bawaan) berarti tanpa pelat, sama seperti sebelumnya. Di mode dua baris, strip toolbar tidak ikut tertutup pelat.
+- **Ukuran toolbar**: 100 sampai 200 % untuk toolbar yang muncul saat kursor di atas jendela beserta ikonnya.
+
 ## Pembaruan
 
 Buka **Tentang Senandung…** dari menu klik kanan atau tray. Isinya deskripsi, versi sekarang, **Cek pembaruan**, dan **Update sekarang**.
