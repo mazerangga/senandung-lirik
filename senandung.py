@@ -169,6 +169,8 @@ STRINGS = {
     "about_status_dev": {"id": "Build lokal: pengecekan update dimatikan.",
                          "en": "Local build: update checks are disabled."},
     "about_checking": {"id": "Memeriksa pembaruan…", "en": "Checking for updates…"},
+    "about_status_pkg": {"id": "Dipasang lewat paket distro: pembaruan lewat manajer paket sistemmu.",
+                         "en": "Installed from a distro package: updates come from your package manager."},
     "about_uptodate": {"id": "Kamu sudah memakai versi terbaru.", "en": "You are up to date."},
     "about_available": {"id": "Versi baru tersedia: {ver}", "en": "New version available: {ver}"},
     "about_check_failed": {"id": "Gagal memeriksa pembaruan: {err}",
@@ -420,6 +422,14 @@ def is_newer(latest, current):
     return bool(a) and bool(b) and a > b
 
 
+def updates_off():
+    """Alasan cek update dimatikan: 'dev' (build lokal), 'pkg' (paket distro: AUR/.deb, diperbarui manajer
+    paket; peluncurnya mengisi SENANDUNG_DISTRO_PACKAGE=1), atau '' (aktif)."""
+    if APP_VERSION == "dev":
+        return "dev"
+    return "pkg" if os.environ.get("SENANDUNG_DISTRO_PACKAGE") else ""
+
+
 class UpdateChecker(QObject):
     """Memberi tahu bila ada rilis lebih baru. Hanya MEMBERI TAHU: tidak mengunduh atau memasang apa pun;
     klik pada menu membuka halaman rilis di browser. Paling sering sekali sehari, di thread terpisah,
@@ -430,7 +440,7 @@ class UpdateChecker(QObject):
     def start(self, cfg, force=False):
         """force=True: cek sekarang juga (dari dialog Tentang), tanpa batas sekali sehari dan
         tanpa melihat pengaturan cek otomatis, karena pengguna memintanya sendiri."""
-        if APP_VERSION == "dev" or (not force and not cfg.get("check_updates")):
+        if updates_off() or (not force and not cfg.get("check_updates")):
             return
         if not force:
             try:
@@ -476,6 +486,30 @@ def pick_asset(assets, kind):
     return None, ""
 
 
+def pick_sums_url(assets):
+    """Alamat berkas SHA256SUMS di rilis (hanya dari repo ini), atau ''."""
+    for a in assets or []:
+        url = str(a.get("browser_download_url", ""))
+        if str(a.get("name", "")).lower() == "sha256sums" and url.startswith(REPO_URL + "/releases/download/"):
+            return url
+    return ""
+
+
+def sha_from_sums(text, filename):
+    """Ambil sha256 untuk `filename` dari isi SHA256SUMS ('<hash>  <nama>' atau '<hash> *<nama>')."""
+    for line in text.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[1].lstrip("*") == filename and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+            return parts[0].lower()
+    return ""
+
+
+def http_text(url, timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(1024 * 1024).decode("utf-8", "replace")
+
+
 def download_file(url, dest, progress, want_sha=""):
     h = hashlib.sha256()
     req = urllib.request.Request(url, headers={"User-Agent": UA})
@@ -506,28 +540,37 @@ class SelfUpdater(QObject):
         def run():
             tmp = None
             try:
-                url, sha = pick_asset(http_json(LATEST_API).get("assets"), kind)
+                assets = http_json(LATEST_API).get("assets")
+                url, sha = pick_asset(assets, kind)
                 if not url:
                     raise RuntimeError("no matching file in the latest release")
+                fname = urllib.parse.unquote(url.rsplit("/", 1)[-1])
+                if not sha:                      # GitHub tidak memberi digest: pakai SHA256SUMS dari rilis
+                    sums = pick_sums_url(assets)
+                    sha = sha_from_sums(http_text(sums), fname) if sums else ""
+                if not sha:
+                    # Tanpa checksum, berkas yang diunduh tidak bisa dibuktikan utuh/asli, dan hasilnya akan
+                    # dijalankan. Lebih aman menolak; pengguna tetap bisa memperbarui dari halaman rilis.
+                    raise RuntimeError("no checksum published for this release; use the Releases page")
                 if kind == "appimage":
                     target = Path(os.environ["APPIMAGE"])
                     tmp = target.with_name(target.name + ".new")
                     download_file(url, tmp, self.progress.emit, sha)
-                    if tmp.read_bytes()[:4] != b"\x7fELF":
-                        raise RuntimeError("downloaded file is not an AppImage")
+                    with open(tmp, "rb") as fh:
+                        if fh.read(4) != b"\x7fELF":
+                            raise RuntimeError("downloaded file is not an AppImage")
                     tmp.chmod(0o755)
                     os.replace(tmp, target)          # aman walau AppImage lama sedang berjalan
                     self.done.emit("", str(target))
                 else:
-                    tmp = Path(tempfile.gettempdir()) / urllib.parse.unquote(url.rsplit("/", 1)[-1])
+                    tmp = Path(tempfile.mkdtemp(prefix="senandung-")) / fname     # folder baru: nama tak bisa ditebak
                     download_file(url, tmp, self.progress.emit, sha)
                     self.done.emit("", str(tmp))
             except Exception as e:
-                if tmp is not None and kind == "appimage":
+                if tmp is not None:                  # jangan tinggalkan berkas unduhan setengah jadi / tak lolos checksum
                     tmp.unlink(missing_ok=True)
                 self.done.emit(str(e), "")
         threading.Thread(target=run, daemon=True).start()
-
 
 
 # Kata penanda "bukan bagian judul asli" di dalam tanda kurung: (feat. X), (Live), (2011 Remaster), ...
@@ -2191,20 +2234,20 @@ class AboutDialog(QDialog):
         self.updater = SelfUpdater()
         self.updater.progress.connect(self.on_progress)
         self.updater.done.connect(self.on_installed)
-        if APP_VERSION != "dev" and not osd.update_tag:
+        if not updates_off() and not osd.update_tag:
             self.check()                 # versi baru yang sudah diketahui tidak perlu dicek ulang
         self.render()
 
     def render(self):
-        dev = APP_VERSION == "dev"
-        newer = bool(self.osd.update_tag) and not dev
-        self.btn_check.setEnabled(not dev and not self.busy and not self.checking)
+        off = updates_off()
+        newer = bool(self.osd.update_tag) and not off
+        self.btn_check.setEnabled(not off and not self.busy and not self.checking)
         self.btn_update.setEnabled(newer and not self.busy)
         self.btn_close.setEnabled(not self.busy)
         if self.busy:
             return
-        if dev:
-            text = tr("about_status_dev")
+        if off:
+            text = tr("about_status_dev" if off == "dev" else "about_status_pkg")
         elif self.checking:
             text = tr("about_checking")
         elif self.error:
@@ -2253,7 +2296,11 @@ class AboutDialog(QDialog):
             return
         # Instance tunggal: aplikasi harus keluar dulu, baru versi baru dijalankan.
         if self.kind == "appimage":
-            QProcess.startDetached("sh", ["-c", 'sleep 1; exec "$0"', path])
+            # Tunggu proses ini benar-benar keluar (maks ~20 dtk) sebelum menjalankan versi baru; kalau tidak,
+            # instance baru melihat yang lama masih memegang socket single-instance lalu langsung berhenti.
+            QProcess.startDetached("sh", ["-c", 'i=0; while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; '
+                                                'do sleep 0.2; i=$((i+1)); done; exec "$0"',
+                                     path, str(os.getpid())])
         else:   # Setup .exe: tutup aplikasi, pasang diam-diam, lalu jalankan lagi (lihat senandung.iss)
             QProcess.startDetached(path, ["/SILENT", "/CLOSEAPPLICATIONS", "/RELAUNCH=1"])
         self.osd.quit_app()
