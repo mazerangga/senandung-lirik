@@ -40,7 +40,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QObject, QPointF, QProcess, QRectF, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QLocale, QObject, QPointF, QProcess, QRect, QRectF, QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -1088,7 +1088,7 @@ class OSD(QWidget):
         self._offset_pending = None
         self.offset_timer = QTimer(self, singleShot=True, interval=700, timeout=self.save_offset)
         if self.can_place and cfg.get("pos_x") >= 0:
-            self.move(cfg.get("pos_x"), cfg.get("pos_y"))
+            self._restore_pos(cfg.get("pos_x"), cfg.get("pos_y"))
 
         self.lyrics = []
         self.times = []
@@ -1169,6 +1169,16 @@ class OSD(QWidget):
     def _saved_size(self, mode):
         kw, kh = self.size_keys(mode)
         return self.cfg.get(kw), self.cfg.get(kh)
+
+    def _restore_pos(self, x, y):
+        """Pulihkan posisi tersimpan hanya bila jendela masih terlihat di salah satu layar. Setelah monitor
+        dicabut atau resolusi berubah, posisi lama bisa di luar layar dan jendela seolah hilang."""
+        want = QRect(x, y, self.width(), self.height())
+        for sc in QGuiApplication.screens():
+            seen = sc.availableGeometry().intersected(want)
+            if seen.width() >= 80 and seen.height() >= 40:
+                self.move(x, y)
+                return
 
     def save_pos(self):
         self.cfg.set("pos_x", self.x())
@@ -1896,6 +1906,11 @@ def win_autostart_set(on):
 
 
 # --------------------------------------------------------------------- pengaturan & menu
+def _index(keys, value, default=0):
+    """Posisi value di keys; nilai tersimpan yang rusak/tidak dikenal jatuh ke default, bukan membuat dialog crash."""
+    return keys.index(value) if value in keys else default
+
+
 class SettingsDialog(QDialog):
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
@@ -1913,7 +1928,7 @@ class SettingsDialog(QDialog):
         self.lang_keys = ["auto", "id", "en"]
         self.lang.addItems([tr("lang_auto"), "Bahasa Indonesia", "English"])   # nama bahasa tidak diterjemahkan
         cur = cfg.get("language")
-        self.lang.setCurrentIndex(self.lang_keys.index(cur) if cur in self.lang_keys else 0)
+        self.lang.setCurrentIndex(_index(self.lang_keys, cur))
         self.mode = QComboBox()
         self.mode.addItems([tr("mode_item_scroll"), tr("mode_item_double")])
         self.mode.setCurrentIndex(0 if cfg.get("mode") == "scroll" else 1)
@@ -1960,11 +1975,11 @@ class SettingsDialog(QDialog):
         self.align = QComboBox()
         self.align_keys = ["left", "center", "right", "zigzag"]
         self.align.addItems([tr("align_left"), tr("align_center"), tr("align_right"), tr("align_zigzag")])
-        self.align.setCurrentIndex(self.align_keys.index(cfg.get("align")))
+        self.align.setCurrentIndex(_index(self.align_keys, cfg.get("align"), 3))
         self.romaji = QComboBox()
         self.romaji_keys = ["off", "romaji", "both"]
         self.romaji.addItems([tr("romaji_off"), tr("romaji_only"), tr("romaji_both")])
-        self.romaji.setCurrentIndex(self.romaji_keys.index(cfg.get("romaji")))
+        self.romaji.setCurrentIndex(_index(self.romaji_keys, cfg.get("romaji"), 1))
         self.offset = QSpinBox(minimum=-10000, maximum=10000, singleStep=100, value=cfg.get("offset_ms"))
         self.offset.setSuffix(" ms")
         self.players = QLineEdit(cfg.get("players"))
