@@ -942,6 +942,7 @@ class OSD(QWidget):
         self.can_place = QGuiApplication.platformName() != "wayland"
         self.pos_timer = QTimer(self, singleShot=True, interval=500, timeout=self.save_pos)
         self.local_offset = 0                                   # geser waktu lagu ini (ms), disimpan di .lrc
+        self._wheel_acc = 0                                     # sisa putaran roda (satu langkah = 120)
         self._offset_pending = None
         self.offset_timer = QTimer(self, singleShot=True, interval=700, timeout=self.save_offset)
         if self.can_place and cfg.get("pos_x") >= 0:
@@ -1256,7 +1257,7 @@ class OSD(QWidget):
     def pos_ms(self):
         now = time.monotonic() * 1000
         p = self.base_pos + (now - self.base_stamp) if self.play_state == "Playing" else self.base_pos
-        p += self.local_offset
+        p += self.s["offset_ms"] + self.local_offset       # geser global (Pengaturan) + per lagu (roda mouse)
         return p % 42000 if self.demo else p
 
     def tick(self):
@@ -1665,8 +1666,14 @@ class OSD(QWidget):
     def wheelEvent(self, ev):
         if not self.lyrics:
             return
-        d = 100 if ev.angleDelta().y() > 0 else -100
-        self.local_offset += d
+        # Satu langkah roda = 120 satuan = 100 ms. Touchpad mengirim banyak event kecil: kumpulkan
+        # dulu sampai cukup satu langkah. Scroll horizontal (delta y = 0) tidak menggeser apa pun.
+        self._wheel_acc += ev.angleDelta().y()
+        steps = int(self._wheel_acc / 120)
+        if steps == 0:
+            return
+        self._wheel_acc -= steps * 120
+        self.local_offset += steps * 100
         self.say(tr("offset_toast", v=self.local_offset))
         if self.cur:                         # simpan ke file .lrc setelah berhenti memutar roda
             self._offset_pending = (dict(self.cur), f"{self.cur['artist']}|{self.cur['title']}")
