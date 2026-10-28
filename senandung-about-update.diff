@@ -1,0 +1,735 @@
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 0f7cbc1..9d5e140 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -130,8 +130,39 @@ jobs:
+           path: installer-out/*.exe
+           if-no-files-found: error
+ 
++  build-appimage:
++    runs-on: ubuntu-22.04   # distro lama: AppImage jalan di lebih banyak distro (glibc lebih rendah)
++    steps:
++      - name: Checkout repository
++        uses: actions/checkout@v4
++
++      - name: Set up Python
++        uses: actions/setup-python@v5
++        with:
++          python-version: '3.12'
++
++      - name: Install libxcb-cursor (dibundel ke AppImage)
++        run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0
++
++      - name: Stamp version into source
++        env:
++          REF_NAME: ${{ github.ref_name }}
++        run: python tools/stamp_version.py "${REF_NAME#v}"
++
++      - name: Build AppImage
++        env:
++          REF_NAME: ${{ github.ref_name }}
++        run: bash tools/build_appimage.sh "${REF_NAME#v}"
++
++      - name: Upload AppImage Artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: linux-appimage
++          path: dist/*.AppImage
++          if-no-files-found: error
++
+   release:
+-    needs: [build-installers, build-exe]
++    needs: [build-installers, build-exe, build-appimage]
+     runs-on: ubuntu-latest
+     permissions:
+       contents: write # Wajib agar bot GitHub memiliki akses membuat rilis dan mengunggah file
+@@ -148,4 +179,5 @@ jobs:
+             all-artifacts/installers/*
+             all-artifacts/windows-exe/Senandung.exe
+             all-artifacts/windows-setup/*.exe
++            all-artifacts/linux-appimage/*.AppImage
+           generate_release_notes: true # Membuat changelog otomatis dari riwayat commit
+diff --git a/README.id.md b/README.id.md
+index eb2e8de..4617d20 100644
+--- a/README.id.md
++++ b/README.id.md
+@@ -30,6 +30,7 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
+ - **Tampilan bisa diatur**: font, ukuran, warna teks dan highlight, outline, teks gradien, perataan (kiri/tengah/kanan/zigzag), selalu di atas, mode kunci (klik tembus).
+ - **Geser waktu** (offset) bila lirik terlalu cepat atau lambat.
+ - **Antarmuka bahasa Indonesia dan Inggris**: mengikuti bahasa sistem secara bawaan, bisa diganti di Pengaturan.
++- **Tentang dan update**: menu **Tentang Senandung…** menampilkan deskripsi, versi sekarang, dan tombol **Update sekarang**. Lihat [Pembaruan](#pembaruan).
+ - **Satu instance** saja, ikon system tray (versi tanpa teks supaya jelas di ukuran kecil), dan opsi mulai bersama sistem.
+ 
+ ## Bahasa dan teknologi yang digunakan
+@@ -46,6 +47,7 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
+ | Installer Linux | **Bash** (`install-senandung.sh`) |
+ | Installer Windows | **PowerShell** (`install-senandung.ps1`) dan **Inno Setup** (`senandung.iss`, menghasilkan Setup `.exe` beserta uninstaller) |
+ | Build `.exe` Windows | **PyInstaller** (`--onefile`) |
++| Build AppImage Linux | **PyInstaller** (`--onedir`) + **appimagetool** (`tools/build_appimage.sh`) |
+ | Skrip ikon | Python + **Pillow** + **NumPy** (`tools/make_icons.py`) |
+ | Pembuat installer | Python (`tools/build_installers.py`), hanya library standar |
+ | Rilis otomatis | **GitHub Actions** (`.github/workflows/release.yml`) |
+@@ -67,7 +69,8 @@ Cara termudah: ambil file jadi dari halaman **Releases**. Setiap rilis berisi:
+ | `Senandung-Setup-<versi>.exe` | Windows, installer bergaya wizard (tanpa perlu Python). Sudah termasuk uninstaller. |
+ | `install-senandung.ps1` | Windows, installer PowerShell (butuh Python 3.10+). |
+ | `install-senandung.sh` | Linux. |
+-| `Senandung.exe` | Windows, aplikasi saja tanpa installer (portabel). |
++| `Senandung.exe` | Windows, aplikasi saja tanpa installer (portabel). Update membuka halaman Releases. |
++| `Senandung-<versi>-x86_64.AppImage` | Linux, satu file tanpa perlu Python atau pip (tetap butuh `playerctl` terpasang). `chmod +x`, lalu jalankan. **Update sekarang** di menu Tentang menggantinya langsung. |
+ | `SHA256SUMS` | Checksum untuk `.sh` dan `.ps1`. |
+ 
+ File di `packaging/` adalah **template** tanpa isi aplikasi, jadi jangan dijalankan langsung. Untuk membuat installer sendiri dari source:
+@@ -80,7 +83,22 @@ python3 tools/build_installers.py    # hasil: dist/install-senandung.sh dan dist
+ 
+ ### Linux
+ 
+-Installer memasang ke `~/.local` tanpa root. Root hanya diminta (dengan konfirmasi) untuk memasang paket sistem seperti `playerctl`. Distro yang dikenali: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
++**Cara 1: AppImage (tanpa Python).** Unduh `Senandung-<versi>-x86_64.AppImage` dari Releases, lalu:
++
++```bash
++chmod +x Senandung-*-x86_64.AppImage
++./Senandung-*-x86_64.AppImage
++```
++
++AppImage membawa Python dan Qt sendiri, jadi hanya beberapa hal yang diambil dari sistem:
++
++- `playerctl` (wajib, untuk membaca pemutar): `sudo apt install playerctl` atau `sudo pacman -S playerctl`.
++- `libfuse2` di Ubuntu 22.04 ke atas. Tanpa itu, jalankan `./Senandung-*.AppImage --appimage-extract-and-run`.
++- Mulai bersama sistem: tambahkan AppImage ke aplikasi startup desktop-mu sendiri (`--autostart` milik installer skrip).
++
++Taruh file di folder yang bisa kamu tulis: **Update sekarang** mengunduh versi baru di sebelahnya lalu menggantinya.
++
++**Cara 2: skrip installer.** Memasang ke `~/.local` tanpa root. Root hanya diminta (dengan konfirmasi) untuk memasang paket sistem seperti `playerctl`. Distro yang dikenali: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
+ 
+ ```bash
+ bash install-senandung.sh            # dari dist/ atau hasil unduhan Releases
+@@ -160,7 +178,7 @@ python3 senandung.py --list-players  # tampilkan pemutar yang terdeteksi
+ | Seret pojok kanan-bawah | Ubah ukuran |
+ | Roda mouse | Geser waktu lirik |
+ | Klik dua kali | Ganti mode (scroll / dua baris) |
+-| Klik kanan atau ikon tray | Menu: mode, kunci, selalu di atas, cari lirik online, buka file `.lrc`, pengaturan, keluar |
++| Klik kanan atau ikon tray | Menu: mode, kunci, selalu di atas, cari lirik online, buka file `.lrc`, pengaturan, tentang / update, keluar |
+ | Tombol X | Sembunyikan ke system tray (muncul lagi saat lagu berganti) |
+ 
+ ## Pengaturan
+@@ -176,6 +194,22 @@ Buka lewat menu klik kanan, **Pengaturan…**. Beberapa yang paling sering dipak
+ 
+ Kamu juga bisa menaruh `.lrc` buatan sendiri di folder lirik; berkas lokal selalu dipakai lebih dulu sebelum mencari online.
+ 
++## Pembaruan
++
++Buka **Tentang Senandung…** dari menu klik kanan atau tray. Isinya deskripsi, versi sekarang, **Cek pembaruan**, dan **Update sekarang**.
++
++- Senandung memeriksa rilis baru di GitHub sekali sehari (1 permintaan) dan hanya **memberi tahu**. Matikan lewat **Cek versi baru otomatis** di Pengaturan. Dialog Tentang selalu memeriksa saat dibuka atau saat tombolnya ditekan.
++- **Update sekarang** aktif bila ada rilis yang lebih baru, dan bekerja begini:
++
++| Dipasang sebagai | Yang dilakukan Update sekarang |
++| --- | --- |
++| AppImage | Mengunduh AppImage baru, mengganti file yang sedang dipakai, lalu menjalankan ulang. |
++| Setup `.exe` (Windows) | Mengunduh `Senandung-Setup-<versi>.exe`, memasangnya diam-diam, lalu membuka aplikasinya lagi. |
++| Installer `.sh` / `.ps1`, `.exe` portabel, dari source | Tidak bisa update sendiri: membuka halaman Releases. Untuk installer `.sh` / `.ps1`, jalankan installer yang baru. |
++
++- Unduhan hanya diterima dari Releases repo ini, dan SHA-256 diverifikasi bila GitHub menyediakannya.
++- Build lokal (`APP_VERSION = "dev"`) tidak memeriksa update. Versi rilis diambil dari tag (lihat [Merilis versi baru](#merilis-versi-baru-untuk-maintainer)).
++
+ ## Romanisasi
+ 
+ Atur **Romanisasi** di Pengaturan ke `romaji` (hanya romaji) atau `both` (teks asli + romaji). Fitur ini opsional: bila pustaka di bawah belum terpasang, barisnya ditampilkan apa adanya.
+@@ -209,7 +243,7 @@ git tag v1.0.1
+ git push origin v1.0.1           # memicu build dan rilis
+ ```
+ 
+-Workflow membuat installer `.sh` dan `.ps1`, membangun `Senandung.exe` (PyInstaller `--onefile`), mengompilasi `Senandung-Setup-<versi>.exe` (Inno Setup), lalu mengunggah semuanya ke halaman Releases. Nomor versi pada Setup `.exe` diambil dari nama tag.
++Workflow membuat installer `.sh` dan `.ps1`, membangun `Senandung.exe` (PyInstaller `--onefile`), mengompilasi `Senandung-Setup-<versi>.exe` (Inno Setup), membangun `Senandung-<versi>-x86_64.AppImage` (di `ubuntu-22.04` supaya jalan di lebih banyak distro), lalu mengunggah semuanya ke halaman Releases. Nomor versi diambil dari nama tag: `tools/stamp_version.py` menulisnya ke `APP_VERSION` di `senandung.py` sebelum tiap build, dan itulah yang ditampilkan dialog Tentang serta dibandingkan dengan rilis terbaru.
+ 
+ Catatan:
+ 
+@@ -223,6 +257,8 @@ Catatan:
+   Bila rilis dengan tag itu sudah terlanjur ada di halaman Releases, hapus dulu rilisnya.
+ - Perbarui nomor versi di `$Version` pada `packaging/windows/install-senandung.ps1` dan bawaan `AppVersion` di `senandung.iss` agar sama dengan tag.
+ - Cek build installer secara lokal sebelum tag: `python3 tools/build_installers.py`.
++- Bangun AppImage secara lokal di Linux dengan `bash tools/build_appimage.sh <versi>` (hasil: `dist/Senandung-<versi>-x86_64.AppImage`).
++- **Update sekarang** mencari aset berakhiran `.AppImage` (Linux) atau bernama `Senandung-Setup-*.exe` (Windows) di rilis terbaru. Pertahankan nama itu, kalau tidak tombolnya hanya membuka halaman Releases.
+ - Commit dan push **semua** folder baru (`romanize/`, `players/`) sebelum membuat tag; tag pada commit yang belum memuatnya menghasilkan aplikasi yang tidak bisa jalan.
+ - Folder paket Python baru di samping `senandung.py` harus didaftarkan di dua tempat, kalau tidak aplikasi hasil install gagal dengan `ModuleNotFoundError`: `APP_PACKAGES` di `tools/build_installers.py`, dan baris `for pkg in ...` di `packaging/linux/install-senandung.sh`. Installer `.ps1` dan PyInstaller mengambil paket dengan sendirinya.
+ 
+@@ -256,7 +292,9 @@ senandung-lirik/
+ │   └── senandung.png              # 512 px
+ ├── tools/
+ │   ├── make_icons.py              # buat ulang semua ukuran ikon dari satu sumber
+-│   └── build_installers.py        # isi template installer dengan source + ikon terbaru
++│   ├── build_installers.py        # isi template installer dengan source + ikon terbaru
++│   ├── build_appimage.sh          # bangun AppImage Linux (PyInstaller + appimagetool)
++│   └── stamp_version.py           # tulis versi rilis ke senandung.py (APP_VERSION)
+ ├── packaging/                     # TEMPLATE installer (tanpa payload)
+ │   ├── linux/install-senandung.sh
+ │   └── windows/{install-senandung.ps1, senandung.iss}
+@@ -281,7 +319,9 @@ Setelah ikon atau kode berubah, jalankan `python3 tools/build_installers.py` sup
+ 
+ ## Pemecahan masalah
+ 
+-- **"playerctl tidak ditemukan"** (Linux): pasang `playerctl`.
++- **"playerctl tidak ditemukan"** (Linux, termasuk AppImage): pasang `playerctl`.
++- **AppImage tidak mau jalan ("dlopen(): error loading libfuse.so.2")**: pasang `libfuse2`, atau jalankan dengan `--appimage-extract-and-run`.
++- **Update sekarang gagal karena izin** (AppImage): folder tempat AppImage berada tidak bisa ditulis. Pindahkan file ke folder milikmu, atau unduh versi baru secara manual.
+ - **Jendela tidak bisa selalu di atas / posisi tidak diingat** (Wayland): jalankan dengan `--x11`.
+ - **Ikon tray tidak muncul di GNOME**: GNOME butuh ekstensi AppIndicator agar ikon tray tampil.
+ - **Lirik tidak muncul**: cek `--list-players` apakah pemutar terdeteksi dan tidak masuk blacklist. Lagu yang tidak ada di LRCLIB tidak akan punya lirik; kamu bisa menyediakan `.lrc` sendiri.
+diff --git a/README.md b/README.md
+index 379e6d1..83eddac 100644
+--- a/README.md
++++ b/README.md
+@@ -30,6 +30,7 @@ It works with the players you already use (Spotify, AIMP, foobar2000, MusicBee,
+ - **Fully customizable look**: font, size, text and highlight colors, outline, gradient text, alignment (left / center / right / zigzag), always on top, lock mode (click-through).
+ - **Time offset** when lyrics run too early or too late.
+ - **English and Indonesian interface**: follows your system language by default, switchable in Settings.
++- **About and updates**: the **About Senandung…** menu shows the description, the current version and an **Update now** button. See [Updates](#updates).
+ - **Single instance**, system tray icon (a text-free version that stays readable at small sizes) and an option to start with the system.
+ 
+ ## Languages and technologies
+@@ -46,6 +47,7 @@ It works with the players you already use (Spotify, AIMP, foobar2000, MusicBee,
+ | Linux installer | **Bash** (`install-senandung.sh`) |
+ | Windows installer | **PowerShell** (`install-senandung.ps1`) and **Inno Setup** (`senandung.iss`, produces the Setup `.exe` with its uninstaller) |
+ | Windows `.exe` build | **PyInstaller** (`--onefile`) |
++| Linux AppImage build | **PyInstaller** (`--onedir`) + **appimagetool** (`tools/build_appimage.sh`) |
+ | Icon script | Python + **Pillow** + **NumPy** (`tools/make_icons.py`) |
+ | Installer builder | Python (`tools/build_installers.py`), standard library only |
+ | Automated releases | **GitHub Actions** (`.github/workflows/release.yml`) |
+@@ -67,7 +69,8 @@ The easiest way: get the ready-made files from the **Releases** page. Each relea
+ | `Senandung-Setup-<version>.exe` | Windows, wizard-style installer (no Python needed). Includes an uninstaller. |
+ | `install-senandung.ps1` | Windows, PowerShell installer (needs Python 3.10+). |
+ | `install-senandung.sh` | Linux. |
+-| `Senandung.exe` | Windows, the app alone with no installer (portable). |
++| `Senandung.exe` | Windows, the app alone with no installer (portable). Updates open the Releases page. |
++| `Senandung-<version>-x86_64.AppImage` | Linux, single file with no Python or pip needed (still needs `playerctl` installed). `chmod +x`, then run. **Update now** in the About menu replaces it in place. |
+ | `SHA256SUMS` | Checksums for the `.sh` and `.ps1`. |
+ 
+ The files in `packaging/` are **templates** without the app inside, so do not run them directly. To build the installers yourself from source:
+@@ -80,7 +83,22 @@ python3 tools/build_installers.py    # output: dist/install-senandung.sh and dis
+ 
+ ### Linux
+ 
+-The installer installs to `~/.local` without root. Root is only requested (with confirmation) to install system packages such as `playerctl`. Recognized distros: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
++**Option 1: AppImage (no Python needed).** Download `Senandung-<version>-x86_64.AppImage` from Releases, then:
++
++```bash
++chmod +x Senandung-*-x86_64.AppImage
++./Senandung-*-x86_64.AppImage
++```
++
++The AppImage carries its own Python and Qt, so only a few things come from your system:
++
++- `playerctl` (required, used to read the player): `sudo apt install playerctl` or `sudo pacman -S playerctl`.
++- `libfuse2` on Ubuntu 22.04 and newer. Without it, run `./Senandung-*.AppImage --appimage-extract-and-run`.
++- Start with the system: add the AppImage to your desktop's startup applications yourself (`--autostart` belongs to the installer script).
++
++Keep the file in a folder you can write to: **Update now** downloads the new version next to it and replaces it.
++
++**Option 2: installer script.** It installs to `~/.local` without root. Root is only requested (with confirmation) to install system packages such as `playerctl`. Recognized distros: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
+ 
+ ```bash
+ bash install-senandung.sh            # from dist/ or downloaded from Releases
+@@ -160,7 +178,7 @@ python3 senandung.py --list-players  # show which players are detected
+ | Drag the bottom-right corner | Resize |
+ | Mouse wheel | Shift the lyric timing |
+ | Double-click | Switch mode (scroll / two-line) |
+-| Right-click or tray icon | Menu: mode, lock, always on top, search lyrics online, open `.lrc` file, settings, quit |
++| Right-click or tray icon | Menu: mode, lock, always on top, search lyrics online, open `.lrc` file, settings, about / update, quit |
+ | X button | Hide to the system tray (reappears when the song changes) |
+ 
+ ## Settings
+@@ -176,6 +194,22 @@ Open them from the right-click menu, **Settings…**. The most useful ones:
+ 
+ You can also drop your own `.lrc` files into the lyrics folder; local files are always used before searching online.
+ 
++## Updates
++
++Open **About Senandung…** from the right-click or tray menu. It shows the description, the current version, **Check for updates** and **Update now**.
++
++- Senandung checks GitHub for a new release once a day (1 request) and only **notifies** you. Turn it off with **Check for new versions automatically** in Settings. The About dialog always checks when you open it or press the button.
++- **Update now** is enabled when a newer release exists, and works like this:
++
++| Installed as | What Update now does |
++| --- | --- |
++| AppImage | Downloads the new AppImage, replaces the current file, and restarts. |
++| Setup `.exe` (Windows) | Downloads `Senandung-Setup-<version>.exe`, installs it silently, and starts the app again. |
++| `.sh` / `.ps1` installer, portable `.exe`, from source | Cannot update itself: opens the Releases page. For the `.sh` / `.ps1` installers, run the new installer again. |
++
++- Downloads are accepted only from this repository's Releases, and the SHA-256 is verified when GitHub provides it.
++- A local build (`APP_VERSION = "dev"`) has update checks turned off. Releases get their version from the tag (see [Publishing a new release](#publishing-a-new-release-for-maintainers)).
++
+ ## Romanization
+ 
+ Set **Romanization** in Settings to `romaji` (romanization only) or `both` (original text + romanization). It is optional: if a library below is not installed, those lines are simply shown as they are.
+@@ -209,7 +243,7 @@ git tag v1.0.1
+ git push origin v1.0.1           # triggers the build and release
+ ```
+ 
+-The workflow builds the `.sh` and `.ps1` installers, builds `Senandung.exe` (PyInstaller `--onefile`), compiles `Senandung-Setup-<version>.exe` (Inno Setup), and uploads everything to the Releases page. The Setup `.exe` takes its version number from the tag name.
++The workflow builds the `.sh` and `.ps1` installers, builds `Senandung.exe` (PyInstaller `--onefile`), compiles `Senandung-Setup-<version>.exe` (Inno Setup), builds `Senandung-<version>-x86_64.AppImage` (on `ubuntu-22.04`, so it runs on more distros), and uploads everything to the Releases page. The version number comes from the tag name: `tools/stamp_version.py` writes it into `APP_VERSION` in `senandung.py` before each build, which is what the About dialog shows and compares against the latest release.
+ 
+ Notes:
+ 
+@@ -223,6 +257,8 @@ Notes:
+   If a release for that tag already exists on the Releases page, delete it first.
+ - Update the version in `$Version` in `packaging/windows/install-senandung.ps1` and the default `AppVersion` in `senandung.iss` so they match the tag.
+ - Check the installer build locally before tagging: `python3 tools/build_installers.py`.
++- Build the AppImage locally on Linux with `bash tools/build_appimage.sh <version>` (output: `dist/Senandung-<version>-x86_64.AppImage`).
++- **Update now** looks for an asset ending in `.AppImage` (Linux) or named `Senandung-Setup-*.exe` (Windows) in the latest release. Keep those names, or the button falls back to opening the Releases page.
+ - Commit and push **all** new folders (`romanize/`, `players/`) before tagging; a tag on a commit without them builds an app that cannot start.
+ - A new Python package folder next to `senandung.py` must be listed in two places, otherwise the installed app fails with `ModuleNotFoundError`: `APP_PACKAGES` in `tools/build_installers.py`, and the `for pkg in ...` lines in `packaging/linux/install-senandung.sh`. The `.ps1` installer and PyInstaller pick packages up on their own.
+ 
+@@ -256,7 +292,9 @@ senandung-lirik/
+ │   └── senandung.png              # 512 px
+ ├── tools/
+ │   ├── make_icons.py              # regenerate all icon sizes from one source
+-│   └── build_installers.py        # fill the installer templates with the latest source + icons
++│   ├── build_installers.py        # fill the installer templates with the latest source + icons
++│   ├── build_appimage.sh          # build the Linux AppImage (PyInstaller + appimagetool)
++│   └── stamp_version.py           # write the release version into senandung.py (APP_VERSION)
+ ├── packaging/                     # installer TEMPLATES (no payload)
+ │   ├── linux/install-senandung.sh
+ │   └── windows/{install-senandung.ps1, senandung.iss}
+@@ -281,7 +319,9 @@ After the icons or the code change, run `python3 tools/build_installers.py` so t
+ 
+ ## Troubleshooting
+ 
+-- **"playerctl not found"** (Linux): install `playerctl`.
++- **"playerctl not found"** (Linux, including the AppImage): install `playerctl`.
++- **AppImage does not start ("dlopen(): error loading libfuse.so.2")**: install `libfuse2`, or run it with `--appimage-extract-and-run`.
++- **Update now fails with a permission error** (AppImage): the folder holding the AppImage is not writable. Move the file to a folder you own, or download the new version manually.
+ - **Window cannot stay on top / position is not remembered** (Wayland): run with `--x11`.
+ - **No tray icon on GNOME**: GNOME needs the AppIndicator extension to show tray icons.
+ - **Lyrics do not appear**: run `--list-players` to check that your player is detected and not blacklisted. Songs that are not on LRCLIB will not have lyrics; you can provide your own `.lrc`.
+diff --git a/packaging/windows/senandung.iss b/packaging/windows/senandung.iss
+index 543bc80..fcf7317 100644
+--- a/packaging/windows/senandung.iss
++++ b/packaging/windows/senandung.iss
+@@ -101,6 +101,14 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType:
+ 
+ [Run]
+ Filename: "{app}\{#AppExe}"; Description: "{cm:RunApp,{#AppName}}"; Flags: nowait postinstall skipifsilent
++; Update dari dialog "Tentang" memanggil Setup dengan /SILENT /RELAUNCH=1: jalankan lagi aplikasinya.
++Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent; Check: RelaunchRequested
+ 
+ [UninstallRun]
+ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillSenandung"
++
++[Code]
++function RelaunchRequested: Boolean;
++begin
++  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
++end;
+diff --git a/senandung.py b/senandung.py
+index b49ae2e..ec66bf6 100644
+--- a/senandung.py
++++ b/senandung.py
+@@ -24,12 +24,14 @@ Language  : UI is available in Indonesian and English (follows the system locale
+ """
+ import asyncio
+ import bisect
++import hashlib
+ import json
+ import math
+ import os
+ import re
+ import shutil
+ import sys
++import tempfile
+ import threading
+ import time
+ import urllib.error
+@@ -37,13 +39,13 @@ import urllib.parse
+ import urllib.request
+ from pathlib import Path
+ 
+-from PySide6.QtCore import QLocale, QObject, QPointF, QRectF, QSettings, Qt, QTimer, QUrl, Signal
++from PySide6.QtCore import QLocale, QObject, QPointF, QProcess, QRectF, QSettings, Qt, QTimer, QUrl, Signal
+ from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage,
+                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
+ from PySide6.QtNetwork import QLocalServer, QLocalSocket
+ from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
+                                QDialogButtonBox, QFileDialog, QFontComboBox, QFormLayout, QHBoxLayout,
+-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
++                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QProgressBar, QPushButton,
+                                QSpinBox, QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
+ 
+ APP_ID = "senandung"
+@@ -147,6 +149,32 @@ STRINGS = {
+                      "en": "New version {ver} available, see the tray menu"},
+     "check_updates": {"id": "Cek versi baru otomatis (1 permintaan ke GitHub per hari)",
+                       "en": "Check for new versions automatically (one request to GitHub per day)"},
++    # --- dialog Tentang / update
++    "m_about": {"id": "Tentang Senandung…", "en": "About Senandung…"},
++    "about_title": {"id": "Tentang Senandung", "en": "About Senandung"},
++    "about_desc": {
++        "id": "Senandung menampilkan lirik tersinkron di layar desktop: overlay transparan bergaya "
++              "karaoke yang selalu di atas. Lirik diambil otomatis dari LRCLIB untuk lagu yang sedang "
++              "diputar di Spotify, AIMP, foobar2000, MusicBee, VLC, dan pemutar lainnya, tanpa plugin.",
++        "en": "Senandung shows synced lyrics on your desktop: a transparent, always-on-top, karaoke-style "
++              "overlay. Lyrics are fetched automatically from LRCLIB for the song playing in Spotify, "
++              "AIMP, foobar2000, MusicBee, VLC and other players, with no plugin needed."},
++    "about_version": {"id": "Versi {v}", "en": "Version {v}"},
++    "about_dev": {"id": "dev (build lokal)", "en": "dev (local build)"},
++    "about_status_dev": {"id": "Build lokal: pengecekan update dimatikan.",
++                         "en": "Local build: update checks are disabled."},
++    "about_checking": {"id": "Memeriksa pembaruan…", "en": "Checking for updates…"},
++    "about_uptodate": {"id": "Kamu sudah memakai versi terbaru.", "en": "You are up to date."},
++    "about_available": {"id": "Versi baru tersedia: {ver}", "en": "New version available: {ver}"},
++    "about_check_failed": {"id": "Gagal memeriksa pembaruan: {err}",
++                           "en": "Could not check for updates: {err}"},
++    "about_check": {"id": "Cek pembaruan", "en": "Check for updates"},
++    "about_update_now": {"id": "Update sekarang", "en": "Update now"},
++    "about_update_tip_manual": {
++        "id": "Instalasi ini tidak bisa update sendiri: tombol membuka halaman unduh.",
++        "en": "This install cannot update itself: the button opens the download page."},
++    "about_downloading": {"id": "Mengunduh pembaruan… {p}%", "en": "Downloading update… {p}%"},
++    "about_update_failed": {"id": "Update gagal: {err}", "en": "Update failed: {err}"},
+     # --- dialog pengaturan
+     "settings_title": {"id": "Pengaturan Senandung", "en": "Senandung Settings"},
+     "lang_auto": {"id": "Otomatis (ikut sistem)", "en": "Automatic (follow system)"},
+@@ -368,16 +396,20 @@ class UpdateChecker(QObject):
+     klik pada menu membuka halaman rilis di browser. Paling sering sekali sehari, di thread terpisah,
+     gagal diam-diam (offline, batas API, belum ada rilis)."""
+     checked = Signal(str, str)           # tag, url dari GitHub (dikirim ke thread utama)
++    failed = Signal(str)                 # pesan galat (hanya didengar dialog Tentang)
+ 
+-    def start(self, cfg):
+-        if APP_VERSION == "dev" or not cfg.get("check_updates"):
+-            return
+-        try:
+-            last = float(cfg.get("last_update_check") or 0)
+-        except ValueError:
+-            last = 0.0
+-        if time.time() - last < UPDATE_EVERY_S:
++    def start(self, cfg, force=False):
++        """force=True: cek sekarang juga (dari dialog Tentang), tanpa batas sekali sehari dan
++        tanpa melihat pengaturan cek otomatis, karena pengguna memintanya sendiri."""
++        if APP_VERSION == "dev" or (not force and not cfg.get("check_updates")):
+             return
++        if not force:
++            try:
++                last = float(cfg.get("last_update_check") or 0)
++            except ValueError:
++                last = 0.0
++            if time.time() - last < UPDATE_EVERY_S:
++                return
+ 
+         def run():
+             try:
+@@ -385,6 +417,86 @@ class UpdateChecker(QObject):
+                 self.checked.emit(str(d.get("tag_name", "")), str(d.get("html_url", "")))
+             except Exception as e:
+                 print(f"[senandung] update check skipped: {e}", file=sys.stderr)
++                self.failed.emit(str(e))
++        threading.Thread(target=run, daemon=True).start()
++
++
++# --- update mandiri (tombol "Update sekarang"): hanya untuk AppImage dan Setup .exe Windows.
++# Instalasi lain (skrip .sh/.ps1, portable, dari source) cukup membuka halaman rilis.
++def install_kind():
++    """'appimage' | 'winsetup' | '' (tidak bisa update sendiri)."""
++    if IS_LINUX and os.environ.get("APPIMAGE"):
++        return "appimage"
++    if IS_WIN and getattr(sys, "frozen", False) and (Path(sys.executable).parent / "unins000.exe").is_file():
++        return "winsetup"                # dipasang lewat Senandung-Setup-<versi>.exe (Inno Setup)
++    return ""
++
++
++def pick_asset(assets, kind):
++    """(url, sha256) berkas rilis yang cocok, hanya dari alamat unduhan repo ini. (None, '') bila tak ada."""
++    for a in assets or []:
++        name = str(a.get("name", "")).lower()
++        url = str(a.get("browser_download_url", ""))
++        if not url.startswith(REPO_URL + "/releases/download/"):
++            continue
++        ok = (name.endswith(".appimage") if kind == "appimage"
++              else name.startswith("senandung-setup") and name.endswith(".exe"))
++        if ok:
++            digest = str(a.get("digest") or "")
++            return url, digest[7:] if digest.startswith("sha256:") else ""
++    return None, ""
++
++
++def download_file(url, dest, progress, want_sha=""):
++    h = hashlib.sha256()
++    req = urllib.request.Request(url, headers={"User-Agent": UA})
++    last = -1
++    with urllib.request.urlopen(req, timeout=30) as r, open(dest, "wb") as f:
++        total = int(r.headers.get("Content-Length") or 0)
++        got = 0
++        while True:
++            chunk = r.read(256 * 1024)
++            if not chunk:
++                break
++            f.write(chunk)
++            h.update(chunk)
++            got += len(chunk)
++            pct = min(100, got * 100 // total) if total else 0
++            if pct != last:
++                last = pct
++                progress(pct)
++    if want_sha and h.hexdigest() != want_sha.lower():
++        raise RuntimeError("checksum mismatch")
++
++
++class SelfUpdater(QObject):
++    progress = Signal(int)
++    done = Signal(str, str)              # (galat, path berkas hasil); galat kosong = sukses
++
++    def start(self, kind):
++        def run():
++            tmp = None
++            try:
++                url, sha = pick_asset(http_json(LATEST_API).get("assets"), kind)
++                if not url:
++                    raise RuntimeError("no matching file in the latest release")
++                if kind == "appimage":
++                    target = Path(os.environ["APPIMAGE"])
++                    tmp = target.with_name(target.name + ".new")
++                    download_file(url, tmp, self.progress.emit, sha)
++                    if tmp.read_bytes()[:4] != b"\x7fELF":
++                        raise RuntimeError("downloaded file is not an AppImage")
++                    tmp.chmod(0o755)
++                    os.replace(tmp, target)          # aman walau AppImage lama sedang berjalan
++                    self.done.emit("", str(target))
++                else:
++                    tmp = Path(tempfile.gettempdir()) / urllib.parse.unquote(url.rsplit("/", 1)[-1])
++                    download_file(url, tmp, self.progress.emit, sha)
++                    self.done.emit("", str(tmp))
++            except Exception as e:
++                if tmp is not None and kind == "appimage":
++                    tmp.unlink(missing_ok=True)
++                self.done.emit(str(e), "")
+         threading.Thread(target=run, daemon=True).start()
+ 
+ 
+@@ -1806,6 +1918,145 @@ def browse_lyrics(osd):
+     osd.apply_lrc(raw, cur)
+ 
+ 
++class AboutDialog(QDialog):
++    """Tentang Senandung: deskripsi, versi sekarang, cek pembaruan, dan tombol Update sekarang."""
++
++    def __init__(self, osd):
++        super().__init__()
++        self.osd = osd
++        self.kind = install_kind()
++        self.busy = False                # sedang mengunduh: dialog tidak boleh ditutup
++        self.checking = False
++        self.error = ""
++        self.setWindowTitle(tr("about_title"))
++        self.setMinimumWidth(440)
++        icon = QLabel()
++        icon.setPixmap(QApplication.windowIcon().pixmap(72, 72))
++        name = QLabel("<h2>Senandung</h2>")
++        ver = QLabel(tr("about_version", v=APP_VERSION if APP_VERSION != "dev" else tr("about_dev")))
++        desc = QLabel(tr("about_desc"))
++        desc.setWordWrap(True)
++        links = QLabel(f'<a href="{REPO_URL}">GitHub</a> · <a href="https://lrclib.net">LRCLIB</a> · '
++                       f'<a href="{REPO_URL}/blob/main/LICENSE">MIT License</a>')
++        links.setOpenExternalLinks(True)
++        self.status = QLabel()
++        self.status.setWordWrap(True)
++        self.bar = QProgressBar()
++        self.bar.setVisible(False)
++        self.btn_check = QPushButton(tr("about_check"))
++        self.btn_check.clicked.connect(self.check)
++        self.btn_update = QPushButton(tr("about_update_now"))
++        self.btn_update.clicked.connect(self.update_now)
++        if not self.kind:
++            self.btn_update.setToolTip(tr("about_update_tip_manual"))
++        self.btn_close = QPushButton(tr("close"))
++        self.btn_close.clicked.connect(self.reject)
++
++        lay = QVBoxLayout(self)
++        for w in (icon, name, ver):
++            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
++            lay.addWidget(w)
++        lay.addWidget(desc)
++        links.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        lay.addWidget(links)
++        lay.addWidget(self.status)
++        lay.addWidget(self.bar)
++        row = QHBoxLayout()
++        row.addWidget(self.btn_check)
++        row.addStretch(1)
++        row.addWidget(self.btn_update)
++        row.addWidget(self.btn_close)
++        lay.addLayout(row)
++
++        osd.updater.checked.connect(self.on_checked)
++        osd.updater.failed.connect(self.on_failed)
++        self.updater = SelfUpdater()
++        self.updater.progress.connect(self.on_progress)
++        self.updater.done.connect(self.on_installed)
++        if APP_VERSION != "dev" and not osd.update_tag:
++            self.check()                 # versi baru yang sudah diketahui tidak perlu dicek ulang
++        self.render()
++
++    def render(self):
++        dev = APP_VERSION == "dev"
++        newer = bool(self.osd.update_tag) and not dev
++        self.btn_check.setEnabled(not dev and not self.busy and not self.checking)
++        self.btn_update.setEnabled(newer and not self.busy)
++        self.btn_close.setEnabled(not self.busy)
++        if self.busy:
++            return
++        if dev:
++            text = tr("about_status_dev")
++        elif self.checking:
++            text = tr("about_checking")
++        elif self.error:
++            text = tr("about_check_failed", err=self.error)
++        elif newer:
++            text = tr("about_available", ver=self.osd.update_tag)
++        else:
++            text = tr("about_uptodate")
++        self.status.setText(text)
++
++    def check(self):
++        self.checking, self.error = True, ""
++        self.osd.updater.start(self.osd.cfg, force=True)
++        self.render()
++
++    def on_checked(self, tag, url):      # OSD.on_update_checked sudah memperbarui osd.update_tag
++        self.checking = False
++        self.render()
++
++    def on_failed(self, err):
++        if self.checking:
++            self.checking, self.error = False, err
++            self.render()
++
++    def update_now(self):
++        if not self.kind:
++            self.osd.open_update_page()
++            return
++        self.busy = True
++        self.bar.setValue(0)
++        self.bar.setVisible(True)
++        self.status.setText(tr("about_downloading", p=0))
++        self.render()
++        self.updater.start(self.kind)
++
++    def on_progress(self, pct):
++        self.bar.setValue(pct)
++        self.status.setText(tr("about_downloading", p=pct))
++
++    def on_installed(self, err, path):
++        if err:
++            self.busy = False
++            self.bar.setVisible(False)
++            self.render()
++            self.status.setText(tr("about_update_failed", err=err))
++            return
++        # Instance tunggal: aplikasi harus keluar dulu, baru versi baru dijalankan.
++        if self.kind == "appimage":
++            QProcess.startDetached("sh", ["-c", 'sleep 1; exec "$0"', path])
++        else:   # Setup .exe: tutup aplikasi, pasang diam-diam, lalu jalankan lagi (lihat senandung.iss)
++            QProcess.startDetached(path, ["/SILENT", "/CLOSEAPPLICATIONS", "/RELAUNCH=1"])
++        self.osd.quit_app()
++
++    def reject(self):
++        if not self.busy:
++            super().reject()
++
++    def done(self, r):
++        for sig, slot in ((self.osd.updater.checked, self.on_checked), (self.osd.updater.failed, self.on_failed)):
++            try:
++                sig.disconnect(slot)
++            except (RuntimeError, TypeError):
++                pass
++        super().done(r)
++
++
++def open_about(osd):
++    AboutDialog(osd).exec()
++
++
+ def build_menu(osd):
+     m = QMenu()
+     a1 = m.addAction(tr("m_scroll"))
+@@ -1858,6 +2109,7 @@ def build_menu(osd):
+     upd.setVisible(False)
+     upd.triggered.connect(osd.open_update_page)
+     m.addAction(tr("m_settings")).triggered.connect(lambda: open_settings(osd))
++    m.addAction(tr("m_about")).triggered.connect(lambda: open_about(osd))
+     m.addAction(tr("m_toggle")).triggered.connect(osd.toggle_visible)
+     m.addSeparator()
+     m.addAction(tr("m_quit")).triggered.connect(osd.quit_app)
+diff --git a/tools/build_appimage.sh b/tools/build_appimage.sh
+new file mode 100755
+index 0000000..d2e1f21
+--- /dev/null
++++ b/tools/build_appimage.sh
+@@ -0,0 +1,69 @@
++#!/usr/bin/env bash
++# Bangun AppImage Senandung (Linux x86_64).
++#
++#   bash tools/build_appimage.sh 1.2          # hasil: dist/Senandung-1.2-x86_64.AppImage
++#
++# Dipanggil CI (release.yml). Bangun di distro LAMA (ubuntu-22.04) supaya jalan di banyak distro.
++# Versi diisi lebih dulu ke senandung.py oleh  python tools/stamp_version.py <versi>  (CI melakukannya).
++# AppImage tetap membutuhkan `playerctl` di sistem pengguna (dipakai membaca pemutar).
++set -euo pipefail
++cd "$(dirname "$0")/.."
++
++VER="${1:?pemakaian: build_appimage.sh <versi>}"
++OUT="dist/Senandung-${VER}-x86_64.AppImage"
++rm -rf build AppDir "dist/senandung" "$OUT"
++mkdir -p dist
++
++python3 -m pip install --quiet pyinstaller PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode
++
++# Qt 6 (xcb) butuh libxcb-cursor0, yang tidak ikut di wheel PySide6 dan tidak ada di semua distro.
++XCB_CURSOR="$(ls /usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0 2>/dev/null || true)"
++EXTRA=()
++[ -n "$XCB_CURSOR" ] && EXTRA+=(--add-binary "$XCB_CURSOR:.")
++
++# Opsi disamakan dengan build Windows (.exe) di release.yml, tanpa winrt dan tanpa --windowed.
++python3 -m PyInstaller --noconfirm --clean --onedir --name senandung \
++  --collect-data pykakasi --collect-submodules unidecode \
++  --hidden-import pypinyin --hidden-import korean_romanizer.romanizer \
++  --exclude-module PySide6.QtQml --exclude-module PySide6.QtQuick \
++  --exclude-module PySide6.QtQuickWidgets --exclude-module PySide6.QtWebEngineCore \
++  --exclude-module PySide6.QtWebEngineWidgets --exclude-module PySide6.QtWebChannel \
++  --exclude-module PySide6.Qt3DCore --exclude-module PySide6.QtMultimedia \
++  --exclude-module PySide6.QtPdf --exclude-module PySide6.QtCharts \
++  --exclude-module PySide6.QtSql --exclude-module PySide6.QtOpenGL \
++  --exclude-module PySide6.QtSvg --exclude-module PySide6.QtDesigner \
++  --exclude-module PySide6.QtTest --exclude-module PySide6.QtHelp \
++  --exclude-module tkinter \
++  --add-data "assets:assets" "${EXTRA[@]}" senandung.py
++
++mkdir -p AppDir/usr/bin
++cp -r dist/senandung/. AppDir/usr/bin/
++cp assets/icons/png/senandung-256.png AppDir/senandung.png
++
++cat > AppDir/senandung.desktop <<DESKTOP
++[Desktop Entry]
++Type=Application
++Name=Senandung
++Comment=Synced on-screen lyrics for your desktop
++Exec=senandung
++Icon=senandung
++Categories=AudioVideo;Audio;Player;
++StartupNotify=false
++DESKTOP
++
++cat > AppDir/AppRun <<'APPRUN'
++#!/bin/sh
++HERE="$(dirname "$(readlink -f "$0")")"
++exec "$HERE/usr/bin/senandung" "$@"
++APPRUN
++chmod +x AppDir/AppRun
++
++TOOL=build/appimagetool-x86_64.AppImage
++if [ ! -x "$TOOL" ]; then
++  mkdir -p build
++  curl -fsSL -o "$TOOL" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
++  chmod +x "$TOOL"
++fi
++# --appimage-extract-and-run: runner CI dan container tidak punya FUSE
++ARCH=x86_64 "$TOOL" --appimage-extract-and-run AppDir "$OUT"
++echo "==> $OUT"

@@ -24,12 +24,14 @@ Language  : UI is available in Indonesian and English (follows the system locale
 """
 import asyncio
 import bisect
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -37,13 +39,13 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from PySide6.QtCore import QLocale, QObject, QPointF, QRectF, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QLocale, QObject, QPointF, QProcess, QRectF, QSettings, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (QBrush, QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF)
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
                                QDialogButtonBox, QFileDialog, QFontComboBox, QFormLayout, QHBoxLayout,
-                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
+                               QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QProgressBar, QPushButton,
                                QSpinBox, QSystemTrayIcon, QToolTip, QVBoxLayout, QWidget)
 
 APP_ID = "senandung"
@@ -147,6 +149,32 @@ STRINGS = {
                      "en": "New version {ver} available, see the tray menu"},
     "check_updates": {"id": "Cek versi baru otomatis (1 permintaan ke GitHub per hari)",
                       "en": "Check for new versions automatically (one request to GitHub per day)"},
+    # --- dialog Tentang / update
+    "m_about": {"id": "Tentang Senandung…", "en": "About Senandung…"},
+    "about_title": {"id": "Tentang Senandung", "en": "About Senandung"},
+    "about_desc": {
+        "id": "Senandung menampilkan lirik tersinkron di layar desktop: overlay transparan bergaya "
+              "karaoke yang selalu di atas. Lirik diambil otomatis dari LRCLIB untuk lagu yang sedang "
+              "diputar di Spotify, AIMP, foobar2000, MusicBee, VLC, dan pemutar lainnya, tanpa plugin.",
+        "en": "Senandung shows synced lyrics on your desktop: a transparent, always-on-top, karaoke-style "
+              "overlay. Lyrics are fetched automatically from LRCLIB for the song playing in Spotify, "
+              "AIMP, foobar2000, MusicBee, VLC and other players, with no plugin needed."},
+    "about_version": {"id": "Versi {v}", "en": "Version {v}"},
+    "about_dev": {"id": "dev (build lokal)", "en": "dev (local build)"},
+    "about_status_dev": {"id": "Build lokal: pengecekan update dimatikan.",
+                         "en": "Local build: update checks are disabled."},
+    "about_checking": {"id": "Memeriksa pembaruan…", "en": "Checking for updates…"},
+    "about_uptodate": {"id": "Kamu sudah memakai versi terbaru.", "en": "You are up to date."},
+    "about_available": {"id": "Versi baru tersedia: {ver}", "en": "New version available: {ver}"},
+    "about_check_failed": {"id": "Gagal memeriksa pembaruan: {err}",
+                           "en": "Could not check for updates: {err}"},
+    "about_check": {"id": "Cek pembaruan", "en": "Check for updates"},
+    "about_update_now": {"id": "Update sekarang", "en": "Update now"},
+    "about_update_tip_manual": {
+        "id": "Instalasi ini tidak bisa update sendiri: tombol membuka halaman unduh.",
+        "en": "This install cannot update itself: the button opens the download page."},
+    "about_downloading": {"id": "Mengunduh pembaruan… {p}%", "en": "Downloading update… {p}%"},
+    "about_update_failed": {"id": "Update gagal: {err}", "en": "Update failed: {err}"},
     # --- dialog pengaturan
     "settings_title": {"id": "Pengaturan Senandung", "en": "Senandung Settings"},
     "lang_auto": {"id": "Otomatis (ikut sistem)", "en": "Automatic (follow system)"},
@@ -368,16 +396,20 @@ class UpdateChecker(QObject):
     klik pada menu membuka halaman rilis di browser. Paling sering sekali sehari, di thread terpisah,
     gagal diam-diam (offline, batas API, belum ada rilis)."""
     checked = Signal(str, str)           # tag, url dari GitHub (dikirim ke thread utama)
+    failed = Signal(str)                 # pesan galat (hanya didengar dialog Tentang)
 
-    def start(self, cfg):
-        if APP_VERSION == "dev" or not cfg.get("check_updates"):
+    def start(self, cfg, force=False):
+        """force=True: cek sekarang juga (dari dialog Tentang), tanpa batas sekali sehari dan
+        tanpa melihat pengaturan cek otomatis, karena pengguna memintanya sendiri."""
+        if APP_VERSION == "dev" or (not force and not cfg.get("check_updates")):
             return
-        try:
-            last = float(cfg.get("last_update_check") or 0)
-        except ValueError:
-            last = 0.0
-        if time.time() - last < UPDATE_EVERY_S:
-            return
+        if not force:
+            try:
+                last = float(cfg.get("last_update_check") or 0)
+            except ValueError:
+                last = 0.0
+            if time.time() - last < UPDATE_EVERY_S:
+                return
 
         def run():
             try:
@@ -385,6 +417,86 @@ class UpdateChecker(QObject):
                 self.checked.emit(str(d.get("tag_name", "")), str(d.get("html_url", "")))
             except Exception as e:
                 print(f"[senandung] update check skipped: {e}", file=sys.stderr)
+                self.failed.emit(str(e))
+        threading.Thread(target=run, daemon=True).start()
+
+
+# --- update mandiri (tombol "Update sekarang"): hanya untuk AppImage dan Setup .exe Windows.
+# Instalasi lain (skrip .sh/.ps1, portable, dari source) cukup membuka halaman rilis.
+def install_kind():
+    """'appimage' | 'winsetup' | '' (tidak bisa update sendiri)."""
+    if IS_LINUX and os.environ.get("APPIMAGE"):
+        return "appimage"
+    if IS_WIN and getattr(sys, "frozen", False) and (Path(sys.executable).parent / "unins000.exe").is_file():
+        return "winsetup"                # dipasang lewat Senandung-Setup-<versi>.exe (Inno Setup)
+    return ""
+
+
+def pick_asset(assets, kind):
+    """(url, sha256) berkas rilis yang cocok, hanya dari alamat unduhan repo ini. (None, '') bila tak ada."""
+    for a in assets or []:
+        name = str(a.get("name", "")).lower()
+        url = str(a.get("browser_download_url", ""))
+        if not url.startswith(REPO_URL + "/releases/download/"):
+            continue
+        ok = (name.endswith(".appimage") if kind == "appimage"
+              else name.startswith("senandung-setup") and name.endswith(".exe"))
+        if ok:
+            digest = str(a.get("digest") or "")
+            return url, digest[7:] if digest.startswith("sha256:") else ""
+    return None, ""
+
+
+def download_file(url, dest, progress, want_sha=""):
+    h = hashlib.sha256()
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    last = -1
+    with urllib.request.urlopen(req, timeout=30) as r, open(dest, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        got = 0
+        while True:
+            chunk = r.read(256 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
+            h.update(chunk)
+            got += len(chunk)
+            pct = min(100, got * 100 // total) if total else 0
+            if pct != last:
+                last = pct
+                progress(pct)
+    if want_sha and h.hexdigest() != want_sha.lower():
+        raise RuntimeError("checksum mismatch")
+
+
+class SelfUpdater(QObject):
+    progress = Signal(int)
+    done = Signal(str, str)              # (galat, path berkas hasil); galat kosong = sukses
+
+    def start(self, kind):
+        def run():
+            tmp = None
+            try:
+                url, sha = pick_asset(http_json(LATEST_API).get("assets"), kind)
+                if not url:
+                    raise RuntimeError("no matching file in the latest release")
+                if kind == "appimage":
+                    target = Path(os.environ["APPIMAGE"])
+                    tmp = target.with_name(target.name + ".new")
+                    download_file(url, tmp, self.progress.emit, sha)
+                    if tmp.read_bytes()[:4] != b"\x7fELF":
+                        raise RuntimeError("downloaded file is not an AppImage")
+                    tmp.chmod(0o755)
+                    os.replace(tmp, target)          # aman walau AppImage lama sedang berjalan
+                    self.done.emit("", str(target))
+                else:
+                    tmp = Path(tempfile.gettempdir()) / urllib.parse.unquote(url.rsplit("/", 1)[-1])
+                    download_file(url, tmp, self.progress.emit, sha)
+                    self.done.emit("", str(tmp))
+            except Exception as e:
+                if tmp is not None and kind == "appimage":
+                    tmp.unlink(missing_ok=True)
+                self.done.emit(str(e), "")
         threading.Thread(target=run, daemon=True).start()
 
 
@@ -1806,6 +1918,145 @@ def browse_lyrics(osd):
     osd.apply_lrc(raw, cur)
 
 
+class AboutDialog(QDialog):
+    """Tentang Senandung: deskripsi, versi sekarang, cek pembaruan, dan tombol Update sekarang."""
+
+    def __init__(self, osd):
+        super().__init__()
+        self.osd = osd
+        self.kind = install_kind()
+        self.busy = False                # sedang mengunduh: dialog tidak boleh ditutup
+        self.checking = False
+        self.error = ""
+        self.setWindowTitle(tr("about_title"))
+        self.setMinimumWidth(440)
+        icon = QLabel()
+        icon.setPixmap(QApplication.windowIcon().pixmap(72, 72))
+        name = QLabel("<h2>Senandung</h2>")
+        ver = QLabel(tr("about_version", v=APP_VERSION if APP_VERSION != "dev" else tr("about_dev")))
+        desc = QLabel(tr("about_desc"))
+        desc.setWordWrap(True)
+        links = QLabel(f'<a href="{REPO_URL}">GitHub</a> · <a href="https://lrclib.net">LRCLIB</a> · '
+                       f'<a href="{REPO_URL}/blob/main/LICENSE">MIT License</a>')
+        links.setOpenExternalLinks(True)
+        self.status = QLabel()
+        self.status.setWordWrap(True)
+        self.bar = QProgressBar()
+        self.bar.setVisible(False)
+        self.btn_check = QPushButton(tr("about_check"))
+        self.btn_check.clicked.connect(self.check)
+        self.btn_update = QPushButton(tr("about_update_now"))
+        self.btn_update.clicked.connect(self.update_now)
+        if not self.kind:
+            self.btn_update.setToolTip(tr("about_update_tip_manual"))
+        self.btn_close = QPushButton(tr("close"))
+        self.btn_close.clicked.connect(self.reject)
+
+        lay = QVBoxLayout(self)
+        for w in (icon, name, ver):
+            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.addWidget(w)
+        lay.addWidget(desc)
+        links.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(links)
+        lay.addWidget(self.status)
+        lay.addWidget(self.bar)
+        row = QHBoxLayout()
+        row.addWidget(self.btn_check)
+        row.addStretch(1)
+        row.addWidget(self.btn_update)
+        row.addWidget(self.btn_close)
+        lay.addLayout(row)
+
+        osd.updater.checked.connect(self.on_checked)
+        osd.updater.failed.connect(self.on_failed)
+        self.updater = SelfUpdater()
+        self.updater.progress.connect(self.on_progress)
+        self.updater.done.connect(self.on_installed)
+        if APP_VERSION != "dev" and not osd.update_tag:
+            self.check()                 # versi baru yang sudah diketahui tidak perlu dicek ulang
+        self.render()
+
+    def render(self):
+        dev = APP_VERSION == "dev"
+        newer = bool(self.osd.update_tag) and not dev
+        self.btn_check.setEnabled(not dev and not self.busy and not self.checking)
+        self.btn_update.setEnabled(newer and not self.busy)
+        self.btn_close.setEnabled(not self.busy)
+        if self.busy:
+            return
+        if dev:
+            text = tr("about_status_dev")
+        elif self.checking:
+            text = tr("about_checking")
+        elif self.error:
+            text = tr("about_check_failed", err=self.error)
+        elif newer:
+            text = tr("about_available", ver=self.osd.update_tag)
+        else:
+            text = tr("about_uptodate")
+        self.status.setText(text)
+
+    def check(self):
+        self.checking, self.error = True, ""
+        self.osd.updater.start(self.osd.cfg, force=True)
+        self.render()
+
+    def on_checked(self, tag, url):      # OSD.on_update_checked sudah memperbarui osd.update_tag
+        self.checking = False
+        self.render()
+
+    def on_failed(self, err):
+        if self.checking:
+            self.checking, self.error = False, err
+            self.render()
+
+    def update_now(self):
+        if not self.kind:
+            self.osd.open_update_page()
+            return
+        self.busy = True
+        self.bar.setValue(0)
+        self.bar.setVisible(True)
+        self.status.setText(tr("about_downloading", p=0))
+        self.render()
+        self.updater.start(self.kind)
+
+    def on_progress(self, pct):
+        self.bar.setValue(pct)
+        self.status.setText(tr("about_downloading", p=pct))
+
+    def on_installed(self, err, path):
+        if err:
+            self.busy = False
+            self.bar.setVisible(False)
+            self.render()
+            self.status.setText(tr("about_update_failed", err=err))
+            return
+        # Instance tunggal: aplikasi harus keluar dulu, baru versi baru dijalankan.
+        if self.kind == "appimage":
+            QProcess.startDetached("sh", ["-c", 'sleep 1; exec "$0"', path])
+        else:   # Setup .exe: tutup aplikasi, pasang diam-diam, lalu jalankan lagi (lihat senandung.iss)
+            QProcess.startDetached(path, ["/SILENT", "/CLOSEAPPLICATIONS", "/RELAUNCH=1"])
+        self.osd.quit_app()
+
+    def reject(self):
+        if not self.busy:
+            super().reject()
+
+    def done(self, r):
+        for sig, slot in ((self.osd.updater.checked, self.on_checked), (self.osd.updater.failed, self.on_failed)):
+            try:
+                sig.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        super().done(r)
+
+
+def open_about(osd):
+    AboutDialog(osd).exec()
+
+
 def build_menu(osd):
     m = QMenu()
     a1 = m.addAction(tr("m_scroll"))
@@ -1858,6 +2109,7 @@ def build_menu(osd):
     upd.setVisible(False)
     upd.triggered.connect(osd.open_update_page)
     m.addAction(tr("m_settings")).triggered.connect(lambda: open_settings(osd))
+    m.addAction(tr("m_about")).triggered.connect(lambda: open_about(osd))
     m.addAction(tr("m_toggle")).triggered.connect(osd.toggle_visible)
     m.addSeparator()
     m.addAction(tr("m_quit")).triggered.connect(osd.quit_app)

@@ -30,6 +30,7 @@ It works with the players you already use (Spotify, AIMP, foobar2000, MusicBee, 
 - **Fully customizable look**: font, size, text and highlight colors, outline, gradient text, alignment (left / center / right / zigzag), always on top, lock mode (click-through).
 - **Time offset** when lyrics run too early or too late.
 - **English and Indonesian interface**: follows your system language by default, switchable in Settings.
+- **About and updates**: the **About Senandung…** menu shows the description, the current version and an **Update now** button. See [Updates](#updates).
 - **Single instance**, system tray icon (a text-free version that stays readable at small sizes) and an option to start with the system.
 
 ## Languages and technologies
@@ -46,6 +47,7 @@ It works with the players you already use (Spotify, AIMP, foobar2000, MusicBee, 
 | Linux installer | **Bash** (`install-senandung.sh`) |
 | Windows installer | **PowerShell** (`install-senandung.ps1`) and **Inno Setup** (`senandung.iss`, produces the Setup `.exe` with its uninstaller) |
 | Windows `.exe` build | **PyInstaller** (`--onefile`) |
+| Linux AppImage build | **PyInstaller** (`--onedir`) + **appimagetool** (`tools/build_appimage.sh`) |
 | Icon script | Python + **Pillow** + **NumPy** (`tools/make_icons.py`) |
 | Installer builder | Python (`tools/build_installers.py`), standard library only |
 | Automated releases | **GitHub Actions** (`.github/workflows/release.yml`) |
@@ -67,7 +69,8 @@ The easiest way: get the ready-made files from the **Releases** page. Each relea
 | `Senandung-Setup-<version>.exe` | Windows, wizard-style installer (no Python needed). Includes an uninstaller. |
 | `install-senandung.ps1` | Windows, PowerShell installer (needs Python 3.10+). |
 | `install-senandung.sh` | Linux. |
-| `Senandung.exe` | Windows, the app alone with no installer (portable). |
+| `Senandung.exe` | Windows, the app alone with no installer (portable). Updates open the Releases page. |
+| `Senandung-<version>-x86_64.AppImage` | Linux, single file with no Python or pip needed (still needs `playerctl` installed). `chmod +x`, then run. **Update now** in the About menu replaces it in place. |
 | `SHA256SUMS` | Checksums for the `.sh` and `.ps1`. |
 
 The files in `packaging/` are **templates** without the app inside, so do not run them directly. To build the installers yourself from source:
@@ -80,7 +83,22 @@ python3 tools/build_installers.py    # output: dist/install-senandung.sh and dis
 
 ### Linux
 
-The installer installs to `~/.local` without root. Root is only requested (with confirmation) to install system packages such as `playerctl`. Recognized distros: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
+**Option 1: AppImage (no Python needed).** Download `Senandung-<version>-x86_64.AppImage` from Releases, then:
+
+```bash
+chmod +x Senandung-*-x86_64.AppImage
+./Senandung-*-x86_64.AppImage
+```
+
+The AppImage carries its own Python and Qt, so only a few things come from your system:
+
+- `playerctl` (required, used to read the player): `sudo apt install playerctl` or `sudo pacman -S playerctl`.
+- `libfuse2` on Ubuntu 22.04 and newer. Without it, run `./Senandung-*.AppImage --appimage-extract-and-run`.
+- Start with the system: add the AppImage to your desktop's startup applications yourself (`--autostart` belongs to the installer script).
+
+Keep the file in a folder you can write to: **Update now** downloads the new version next to it and replaces it.
+
+**Option 2: installer script.** It installs to `~/.local` without root. Root is only requested (with confirmation) to install system packages such as `playerctl`. Recognized distros: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
 
 ```bash
 bash install-senandung.sh            # from dist/ or downloaded from Releases
@@ -160,7 +178,7 @@ python3 senandung.py --list-players  # show which players are detected
 | Drag the bottom-right corner | Resize |
 | Mouse wheel | Shift the lyric timing |
 | Double-click | Switch mode (scroll / two-line) |
-| Right-click or tray icon | Menu: mode, lock, always on top, search lyrics online, open `.lrc` file, settings, quit |
+| Right-click or tray icon | Menu: mode, lock, always on top, search lyrics online, open `.lrc` file, settings, about / update, quit |
 | X button | Hide to the system tray (reappears when the song changes) |
 
 ## Settings
@@ -175,6 +193,22 @@ Open them from the right-click menu, **Settings…**. The most useful ones:
 - **Time offset**: 0 ms by default. Per-song offset (mouse wheel) is saved in the song's `.lrc` as `[offset:N]`.
 
 You can also drop your own `.lrc` files into the lyrics folder; local files are always used before searching online.
+
+## Updates
+
+Open **About Senandung…** from the right-click or tray menu. It shows the description, the current version, **Check for updates** and **Update now**.
+
+- Senandung checks GitHub for a new release once a day (1 request) and only **notifies** you. Turn it off with **Check for new versions automatically** in Settings. The About dialog always checks when you open it or press the button.
+- **Update now** is enabled when a newer release exists, and works like this:
+
+| Installed as | What Update now does |
+| --- | --- |
+| AppImage | Downloads the new AppImage, replaces the current file, and restarts. |
+| Setup `.exe` (Windows) | Downloads `Senandung-Setup-<version>.exe`, installs it silently, and starts the app again. |
+| `.sh` / `.ps1` installer, portable `.exe`, from source | Cannot update itself: opens the Releases page. For the `.sh` / `.ps1` installers, run the new installer again. |
+
+- Downloads are accepted only from this repository's Releases, and the SHA-256 is verified when GitHub provides it.
+- A local build (`APP_VERSION = "dev"`) has update checks turned off. Releases get their version from the tag (see [Publishing a new release](#publishing-a-new-release-for-maintainers)).
 
 ## Romanization
 
@@ -209,7 +243,7 @@ git tag v1.0.1
 git push origin v1.0.1           # triggers the build and release
 ```
 
-The workflow builds the `.sh` and `.ps1` installers, builds `Senandung.exe` (PyInstaller `--onefile`), compiles `Senandung-Setup-<version>.exe` (Inno Setup), and uploads everything to the Releases page. The Setup `.exe` takes its version number from the tag name.
+The workflow builds the `.sh` and `.ps1` installers, builds `Senandung.exe` (PyInstaller `--onefile`), compiles `Senandung-Setup-<version>.exe` (Inno Setup), builds `Senandung-<version>-x86_64.AppImage` (on `ubuntu-22.04`, so it runs on more distros), and uploads everything to the Releases page. The version number comes from the tag name: `tools/stamp_version.py` writes it into `APP_VERSION` in `senandung.py` before each build, which is what the About dialog shows and compares against the latest release.
 
 Notes:
 
@@ -223,6 +257,8 @@ Notes:
   If a release for that tag already exists on the Releases page, delete it first.
 - Update the version in `$Version` in `packaging/windows/install-senandung.ps1` and the default `AppVersion` in `senandung.iss` so they match the tag.
 - Check the installer build locally before tagging: `python3 tools/build_installers.py`.
+- Build the AppImage locally on Linux with `bash tools/build_appimage.sh <version>` (output: `dist/Senandung-<version>-x86_64.AppImage`).
+- **Update now** looks for an asset ending in `.AppImage` (Linux) or named `Senandung-Setup-*.exe` (Windows) in the latest release. Keep those names, or the button falls back to opening the Releases page.
 - Commit and push **all** new folders (`romanize/`, `players/`) before tagging; a tag on a commit without them builds an app that cannot start.
 - A new Python package folder next to `senandung.py` must be listed in two places, otherwise the installed app fails with `ModuleNotFoundError`: `APP_PACKAGES` in `tools/build_installers.py`, and the `for pkg in ...` lines in `packaging/linux/install-senandung.sh`. The `.ps1` installer and PyInstaller pick packages up on their own.
 
@@ -256,7 +292,9 @@ senandung-lirik/
 │   └── senandung.png              # 512 px
 ├── tools/
 │   ├── make_icons.py              # regenerate all icon sizes from one source
-│   └── build_installers.py        # fill the installer templates with the latest source + icons
+│   ├── build_installers.py        # fill the installer templates with the latest source + icons
+│   ├── build_appimage.sh          # build the Linux AppImage (PyInstaller + appimagetool)
+│   └── stamp_version.py           # write the release version into senandung.py (APP_VERSION)
 ├── packaging/                     # installer TEMPLATES (no payload)
 │   ├── linux/install-senandung.sh
 │   └── windows/{install-senandung.ps1, senandung.iss}
@@ -281,7 +319,9 @@ After the icons or the code change, run `python3 tools/build_installers.py` so t
 
 ## Troubleshooting
 
-- **"playerctl not found"** (Linux): install `playerctl`.
+- **"playerctl not found"** (Linux, including the AppImage): install `playerctl`.
+- **AppImage does not start ("dlopen(): error loading libfuse.so.2")**: install `libfuse2`, or run it with `--appimage-extract-and-run`.
+- **Update now fails with a permission error** (AppImage): the folder holding the AppImage is not writable. Move the file to a folder you own, or download the new version manually.
 - **Window cannot stay on top / position is not remembered** (Wayland): run with `--x11`.
 - **No tray icon on GNOME**: GNOME needs the AppIndicator extension to show tray icons.
 - **Lyrics do not appear**: run `--list-players` to check that your player is detected and not blacklisted. Songs that are not on LRCLIB will not have lyrics; you can provide your own `.lrc`.

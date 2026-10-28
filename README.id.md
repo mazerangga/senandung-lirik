@@ -30,6 +30,7 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
 - **Tampilan bisa diatur**: font, ukuran, warna teks dan highlight, outline, teks gradien, perataan (kiri/tengah/kanan/zigzag), selalu di atas, mode kunci (klik tembus).
 - **Geser waktu** (offset) bila lirik terlalu cepat atau lambat.
 - **Antarmuka bahasa Indonesia dan Inggris**: mengikuti bahasa sistem secara bawaan, bisa diganti di Pengaturan.
+- **Tentang dan update**: menu **Tentang Senandung…** menampilkan deskripsi, versi sekarang, dan tombol **Update sekarang**. Lihat [Pembaruan](#pembaruan).
 - **Satu instance** saja, ikon system tray (versi tanpa teks supaya jelas di ukuran kecil), dan opsi mulai bersama sistem.
 
 ## Bahasa dan teknologi yang digunakan
@@ -46,6 +47,7 @@ Bekerja dengan pemutar yang sudah kamu pakai (Spotify, AIMP, foobar2000, MusicBe
 | Installer Linux | **Bash** (`install-senandung.sh`) |
 | Installer Windows | **PowerShell** (`install-senandung.ps1`) dan **Inno Setup** (`senandung.iss`, menghasilkan Setup `.exe` beserta uninstaller) |
 | Build `.exe` Windows | **PyInstaller** (`--onefile`) |
+| Build AppImage Linux | **PyInstaller** (`--onedir`) + **appimagetool** (`tools/build_appimage.sh`) |
 | Skrip ikon | Python + **Pillow** + **NumPy** (`tools/make_icons.py`) |
 | Pembuat installer | Python (`tools/build_installers.py`), hanya library standar |
 | Rilis otomatis | **GitHub Actions** (`.github/workflows/release.yml`) |
@@ -67,7 +69,8 @@ Cara termudah: ambil file jadi dari halaman **Releases**. Setiap rilis berisi:
 | `Senandung-Setup-<versi>.exe` | Windows, installer bergaya wizard (tanpa perlu Python). Sudah termasuk uninstaller. |
 | `install-senandung.ps1` | Windows, installer PowerShell (butuh Python 3.10+). |
 | `install-senandung.sh` | Linux. |
-| `Senandung.exe` | Windows, aplikasi saja tanpa installer (portabel). |
+| `Senandung.exe` | Windows, aplikasi saja tanpa installer (portabel). Update membuka halaman Releases. |
+| `Senandung-<versi>-x86_64.AppImage` | Linux, satu file tanpa perlu Python atau pip (tetap butuh `playerctl` terpasang). `chmod +x`, lalu jalankan. **Update sekarang** di menu Tentang menggantinya langsung. |
 | `SHA256SUMS` | Checksum untuk `.sh` dan `.ps1`. |
 
 File di `packaging/` adalah **template** tanpa isi aplikasi, jadi jangan dijalankan langsung. Untuk membuat installer sendiri dari source:
@@ -80,7 +83,22 @@ python3 tools/build_installers.py    # hasil: dist/install-senandung.sh dan dist
 
 ### Linux
 
-Installer memasang ke `~/.local` tanpa root. Root hanya diminta (dengan konfirmasi) untuk memasang paket sistem seperti `playerctl`. Distro yang dikenali: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
+**Cara 1: AppImage (tanpa Python).** Unduh `Senandung-<versi>-x86_64.AppImage` dari Releases, lalu:
+
+```bash
+chmod +x Senandung-*-x86_64.AppImage
+./Senandung-*-x86_64.AppImage
+```
+
+AppImage membawa Python dan Qt sendiri, jadi hanya beberapa hal yang diambil dari sistem:
+
+- `playerctl` (wajib, untuk membaca pemutar): `sudo apt install playerctl` atau `sudo pacman -S playerctl`.
+- `libfuse2` di Ubuntu 22.04 ke atas. Tanpa itu, jalankan `./Senandung-*.AppImage --appimage-extract-and-run`.
+- Mulai bersama sistem: tambahkan AppImage ke aplikasi startup desktop-mu sendiri (`--autostart` milik installer skrip).
+
+Taruh file di folder yang bisa kamu tulis: **Update sekarang** mengunduh versi baru di sebelahnya lalu menggantinya.
+
+**Cara 2: skrip installer.** Memasang ke `~/.local` tanpa root. Root hanya diminta (dengan konfirmasi) untuk memasang paket sistem seperti `playerctl`. Distro yang dikenali: Arch, Debian/Ubuntu, Fedora/RHEL, openSUSE.
 
 ```bash
 bash install-senandung.sh            # dari dist/ atau hasil unduhan Releases
@@ -160,7 +178,7 @@ python3 senandung.py --list-players  # tampilkan pemutar yang terdeteksi
 | Seret pojok kanan-bawah | Ubah ukuran |
 | Roda mouse | Geser waktu lirik |
 | Klik dua kali | Ganti mode (scroll / dua baris) |
-| Klik kanan atau ikon tray | Menu: mode, kunci, selalu di atas, cari lirik online, buka file `.lrc`, pengaturan, keluar |
+| Klik kanan atau ikon tray | Menu: mode, kunci, selalu di atas, cari lirik online, buka file `.lrc`, pengaturan, tentang / update, keluar |
 | Tombol X | Sembunyikan ke system tray (muncul lagi saat lagu berganti) |
 
 ## Pengaturan
@@ -175,6 +193,22 @@ Buka lewat menu klik kanan, **Pengaturan…**. Beberapa yang paling sering dipak
 - **Geser waktu**: bawaan 0 ms. Geser per lagu (roda mouse) disimpan di file `.lrc` lagunya sebagai `[offset:N]`.
 
 Kamu juga bisa menaruh `.lrc` buatan sendiri di folder lirik; berkas lokal selalu dipakai lebih dulu sebelum mencari online.
+
+## Pembaruan
+
+Buka **Tentang Senandung…** dari menu klik kanan atau tray. Isinya deskripsi, versi sekarang, **Cek pembaruan**, dan **Update sekarang**.
+
+- Senandung memeriksa rilis baru di GitHub sekali sehari (1 permintaan) dan hanya **memberi tahu**. Matikan lewat **Cek versi baru otomatis** di Pengaturan. Dialog Tentang selalu memeriksa saat dibuka atau saat tombolnya ditekan.
+- **Update sekarang** aktif bila ada rilis yang lebih baru, dan bekerja begini:
+
+| Dipasang sebagai | Yang dilakukan Update sekarang |
+| --- | --- |
+| AppImage | Mengunduh AppImage baru, mengganti file yang sedang dipakai, lalu menjalankan ulang. |
+| Setup `.exe` (Windows) | Mengunduh `Senandung-Setup-<versi>.exe`, memasangnya diam-diam, lalu membuka aplikasinya lagi. |
+| Installer `.sh` / `.ps1`, `.exe` portabel, dari source | Tidak bisa update sendiri: membuka halaman Releases. Untuk installer `.sh` / `.ps1`, jalankan installer yang baru. |
+
+- Unduhan hanya diterima dari Releases repo ini, dan SHA-256 diverifikasi bila GitHub menyediakannya.
+- Build lokal (`APP_VERSION = "dev"`) tidak memeriksa update. Versi rilis diambil dari tag (lihat [Merilis versi baru](#merilis-versi-baru-untuk-maintainer)).
 
 ## Romanisasi
 
@@ -209,7 +243,7 @@ git tag v1.0.1
 git push origin v1.0.1           # memicu build dan rilis
 ```
 
-Workflow membuat installer `.sh` dan `.ps1`, membangun `Senandung.exe` (PyInstaller `--onefile`), mengompilasi `Senandung-Setup-<versi>.exe` (Inno Setup), lalu mengunggah semuanya ke halaman Releases. Nomor versi pada Setup `.exe` diambil dari nama tag.
+Workflow membuat installer `.sh` dan `.ps1`, membangun `Senandung.exe` (PyInstaller `--onefile`), mengompilasi `Senandung-Setup-<versi>.exe` (Inno Setup), membangun `Senandung-<versi>-x86_64.AppImage` (di `ubuntu-22.04` supaya jalan di lebih banyak distro), lalu mengunggah semuanya ke halaman Releases. Nomor versi diambil dari nama tag: `tools/stamp_version.py` menulisnya ke `APP_VERSION` di `senandung.py` sebelum tiap build, dan itulah yang ditampilkan dialog Tentang serta dibandingkan dengan rilis terbaru.
 
 Catatan:
 
@@ -223,6 +257,8 @@ Catatan:
   Bila rilis dengan tag itu sudah terlanjur ada di halaman Releases, hapus dulu rilisnya.
 - Perbarui nomor versi di `$Version` pada `packaging/windows/install-senandung.ps1` dan bawaan `AppVersion` di `senandung.iss` agar sama dengan tag.
 - Cek build installer secara lokal sebelum tag: `python3 tools/build_installers.py`.
+- Bangun AppImage secara lokal di Linux dengan `bash tools/build_appimage.sh <versi>` (hasil: `dist/Senandung-<versi>-x86_64.AppImage`).
+- **Update sekarang** mencari aset berakhiran `.AppImage` (Linux) atau bernama `Senandung-Setup-*.exe` (Windows) di rilis terbaru. Pertahankan nama itu, kalau tidak tombolnya hanya membuka halaman Releases.
 - Commit dan push **semua** folder baru (`romanize/`, `players/`) sebelum membuat tag; tag pada commit yang belum memuatnya menghasilkan aplikasi yang tidak bisa jalan.
 - Folder paket Python baru di samping `senandung.py` harus didaftarkan di dua tempat, kalau tidak aplikasi hasil install gagal dengan `ModuleNotFoundError`: `APP_PACKAGES` di `tools/build_installers.py`, dan baris `for pkg in ...` di `packaging/linux/install-senandung.sh`. Installer `.ps1` dan PyInstaller mengambil paket dengan sendirinya.
 
@@ -256,7 +292,9 @@ senandung-lirik/
 │   └── senandung.png              # 512 px
 ├── tools/
 │   ├── make_icons.py              # buat ulang semua ukuran ikon dari satu sumber
-│   └── build_installers.py        # isi template installer dengan source + ikon terbaru
+│   ├── build_installers.py        # isi template installer dengan source + ikon terbaru
+│   ├── build_appimage.sh          # bangun AppImage Linux (PyInstaller + appimagetool)
+│   └── stamp_version.py           # tulis versi rilis ke senandung.py (APP_VERSION)
 ├── packaging/                     # TEMPLATE installer (tanpa payload)
 │   ├── linux/install-senandung.sh
 │   └── windows/{install-senandung.ps1, senandung.iss}
@@ -281,7 +319,9 @@ Setelah ikon atau kode berubah, jalankan `python3 tools/build_installers.py` sup
 
 ## Pemecahan masalah
 
-- **"playerctl tidak ditemukan"** (Linux): pasang `playerctl`.
+- **"playerctl tidak ditemukan"** (Linux, termasuk AppImage): pasang `playerctl`.
+- **AppImage tidak mau jalan ("dlopen(): error loading libfuse.so.2")**: pasang `libfuse2`, atau jalankan dengan `--appimage-extract-and-run`.
+- **Update sekarang gagal karena izin** (AppImage): folder tempat AppImage berada tidak bisa ditulis. Pindahkan file ke folder milikmu, atau unduh versi baru secara manual.
 - **Jendela tidak bisa selalu di atas / posisi tidak diingat** (Wayland): jalankan dengan `--x11`.
 - **Ikon tray tidak muncul di GNOME**: GNOME butuh ekstensi AppIndicator agar ikon tray tampil.
 - **Lirik tidak muncul**: cek `--list-players` apakah pemutar terdeteksi dan tidak masuk blacklist. Lagu yang tidak ada di LRCLIB tidak akan punya lirik; kamu bisa menyediakan `.lrc` sendiri.

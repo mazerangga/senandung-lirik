@@ -130,8 +130,39 @@ jobs:
           path: installer-out/*.exe
           if-no-files-found: error
 
+  build-appimage:
+    runs-on: ubuntu-22.04   # distro lama: AppImage jalan di lebih banyak distro (glibc lebih rendah)
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install libxcb-cursor (dibundel ke AppImage)
+        run: sudo apt-get update && sudo apt-get install -y libxcb-cursor0
+
+      - name: Stamp version into source
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: python tools/stamp_version.py "${REF_NAME#v}"
+
+      - name: Build AppImage
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: bash tools/build_appimage.sh "${REF_NAME#v}"
+
+      - name: Upload AppImage Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
   release:
-    needs: [build-installers, build-exe]
+    needs: [build-installers, build-exe, build-appimage]
     runs-on: ubuntu-latest
     permissions:
       contents: write # Wajib agar bot GitHub memiliki akses membuat rilis dan mengunggah file
@@ -148,4 +179,5 @@ jobs:
             all-artifacts/installers/*
             all-artifacts/windows-exe/Senandung.exe
             all-artifacts/windows-setup/*.exe
+            all-artifacts/linux-appimage/*.AppImage
           generate_release_notes: true # Membuat changelog otomatis dari riwayat commit
