@@ -222,7 +222,9 @@ say "$(T make_venv "$PREFIX/venv")"
 rm -rf "$PREFIX/venv"
 python3 -m venv "$PREFIX/venv" || die "$(T venv_failed)"
 say "$(T dl_mods)"
-"$PREFIX/venv/bin/pip" install --disable-pip-version-check -q "${PIP_PKGS[@]}" \
+PIP_ARGS=("${PIP_PKGS[@]}")                       # cadangan bila payload tanpa requirements.txt
+if [ -f "$TMP/requirements.txt" ]; then PIP_ARGS=(-r "$TMP/requirements.txt"); fi   # daftar dependensi satu-satunya
+"$PREFIX/venv/bin/pip" install --disable-pip-version-check -q "${PIP_ARGS[@]}" \
   || die "$(T pip_failed)"
 "$PREFIX/venv/bin/python" -c 'import PySide6.QtWidgets, pykakasi, pypinyin, korean_romanizer, unidecode' \
   || die "$(T import_failed)"

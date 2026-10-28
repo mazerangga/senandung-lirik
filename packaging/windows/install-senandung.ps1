@@ -210,7 +210,8 @@ function Do-Install {
   if ($LASTEXITCODE -ne 0) { Die (T venv_failed) }
 
   Say (T dl_mods)
-  & $Py -m pip install --disable-pip-version-check -q @Pkgs
+  $req = Join-Path $Prefix "requirements.txt"
+  if (Test-Path $req) { & $Py -m pip install --disable-pip-version-check -q -r $req } else { & $Py -m pip install --disable-pip-version-check -q @Pkgs }
   if ($LASTEXITCODE -ne 0) { Die (T pip_failed) }
   & $Py -c "import PySide6.QtWidgets, pykakasi, pypinyin, korean_romanizer, unidecode; from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager"
   if ($LASTEXITCODE -ne 0) { Die (T import_failed) }

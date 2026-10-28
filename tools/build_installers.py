@@ -66,7 +66,7 @@ def stamp_version(data, pattern, fmt, version):
 
 def payload_files(with_ico):
     """Daftar (nama di arsip, isi). Urutan tetap supaya hasil deterministik."""
-    items = [("senandung.py", SCRIPT.read_bytes())]
+    items = [("senandung.py", SCRIPT.read_bytes()), ("requirements.txt", (ROOT / "requirements.txt").read_bytes())]
     # modul aplikasi ikut dibawa; urutan nama tetap supaya hasil deterministik
     for pkg in APP_PACKAGES:
         items += [(f"{pkg}/{p.name}", p.read_bytes()) for p in sorted((ROOT / pkg).glob("*.py"))]
