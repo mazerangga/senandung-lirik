@@ -1937,7 +1937,7 @@ class AboutDialog(QDialog):
         desc = QLabel(tr("about_desc"))
         desc.setWordWrap(True)
         links = QLabel(f'<a href="{REPO_URL}">GitHub</a> · <a href="https://lrclib.net">LRCLIB</a> · '
-                       f'<a href="{REPO_URL}/blob/main/LICENSE">MIT License</a>')
+                       f'<a href="{REPO_URL}/blob/main/LICENSE">GPL-3.0-or-later</a>')
         links.setOpenExternalLinks(True)
         self.status = QLabel()
         self.status.setWordWrap(True)
