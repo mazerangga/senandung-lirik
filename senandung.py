@@ -320,12 +320,22 @@ class Cfg:
 
 
 # --------------------------------------------------------------------- lirik & romanisasi
+# Cap waktu baris: [mm:ss.xx]. Pecahan boleh dipisah '.', ':' atau ',' (ketiganya ada di file .lrc nyata)
+# dan boleh 1-3 digit ([00:01.5], [00:01.50], [00:01.500]).
+_LRC_TS = re.compile(r"\[(\d+):(\d+)(?:[.:,](\d+))?\]")
+# Cap waktu per kata (LRC "enhanced"): <mm:ss.xx>. Belum dipakai untuk animasi, tapi tidak boleh tampil di layar.
+_LRC_WORD_TS = re.compile(r"<\d+:\d+(?:[.:,]\d+)?>")
+
+
 def parse_lrc(text):
     out = []
-    rx = re.compile(r"\[(\d+):(\d+(?:\.\d+)?)\]")
     for line in text.splitlines():
-        times = [int(m.group(1)) * 60000 + round(float(m.group(2)) * 1000) for m in rx.finditer(line)]
-        body = re.sub(r"\[[^\]]*\]", "", line).strip()
+        times = []
+        for m in _LRC_TS.finditer(line):
+            frac = int((m.group(3) or "0").ljust(3, "0")[:3])
+            times.append(int(m.group(1)) * 60000 + int(m.group(2)) * 1000 + frac)
+        body = re.sub(r"\[[^\]]*\]", "", line)
+        body = re.sub(r"\s+", " ", _LRC_WORD_TS.sub("", body)).strip()
         out += [(t, body) for t in times]
     out.sort(key=lambda x: x[0])
     return out
