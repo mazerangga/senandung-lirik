@@ -64,7 +64,10 @@ OutputBaseFilename=Senandung-Setup-{#AppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-CloseApplications=yes
+; Dimatikan: Restart Manager hanya bisa 'meminta' jendela menutup, sedangkan aplikasi ini hidup di tray tanpa
+; jendela yang menjawab, sehingga muncul dialog "Setup was unable to automatically close all applications".
+; Proses lama dihentikan langsung di PrepareToInstall (seperti uninstaller).
+CloseApplications=no
 RestartApplications=no
 
 [Languages]
@@ -108,6 +111,15 @@ Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent; Check: RelaunchReque
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM {#AppExe}"; Flags: runhidden; RunOnceId: "KillSenandung"
 
 [Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM {#AppExe}', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Sleep(400);                      { beri waktu Windows melepas kunci berkas }
+  Result := '';
+end;
+
 function RelaunchRequested: Boolean;
 begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';

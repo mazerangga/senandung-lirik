@@ -2317,7 +2317,7 @@ class AboutDialog(QDialog):
                                                 'do sleep 0.2; i=$((i+1)); done; exec "$0"',
                                      path, str(os.getpid())])
         else:   # Setup .exe: tutup aplikasi, pasang diam-diam, lalu jalankan lagi (lihat senandung.iss)
-            QProcess.startDetached(path, ["/SILENT", "/CLOSEAPPLICATIONS", "/RELAUNCH=1"])
+            QProcess.startDetached(path, ["/SILENT", "/RELAUNCH=1"])
         self.osd.quit_app()
 
     def reject(self):
