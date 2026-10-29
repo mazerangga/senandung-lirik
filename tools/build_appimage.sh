@@ -14,7 +14,7 @@ OUT="dist/Senandung-${VER}-x86_64.AppImage"
 rm -rf build AppDir "dist/senandung" "$OUT"
 mkdir -p dist
 
-python3 -m pip install --quiet pyinstaller PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode
+python3 -m pip install --quiet pyinstaller -r requirements.txt
 
 # Qt 6 (xcb) butuh libxcb-cursor0, yang tidak ikut di wheel PySide6 dan tidak ada di semua distro.
 XCB_CURSOR="$(ls /usr/lib/x86_64-linux-gnu/libxcb-cursor.so.0 2>/dev/null || true)"
@@ -58,10 +58,14 @@ exec "$HERE/usr/bin/senandung" "$@"
 APPRUN
 chmod +x AppDir/AppRun
 
-TOOL=build/appimagetool-x86_64.AppImage
+# appimagetool dipin ke rilis tetap + sha256 (tag 'continuous' berubah-ubah dan tidak bisa diverifikasi).
+TOOL_VER=1.9.1
+TOOL_SHA=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+TOOL=build/appimagetool-$TOOL_VER-x86_64.AppImage
 if [ ! -x "$TOOL" ]; then
   mkdir -p build
-  curl -fsSL -o "$TOOL" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+  curl -fsSL -o "$TOOL" "https://github.com/AppImage/appimagetool/releases/download/$TOOL_VER/appimagetool-x86_64.AppImage"
+  echo "$TOOL_SHA  $TOOL" | sha256sum -c - || { rm -f "$TOOL"; echo "XX  checksum appimagetool tidak cocok" >&2; exit 1; }
   chmod +x "$TOOL"
 fi
 # --appimage-extract-and-run: runner CI dan container tidak punya FUSE

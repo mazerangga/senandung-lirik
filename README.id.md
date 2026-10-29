@@ -71,7 +71,7 @@ Cara termudah: ambil file jadi dari halaman **Releases**. Setiap rilis berisi:
 | `install-senandung.sh` | Linux. |
 | `Senandung.exe` | Windows, aplikasi saja tanpa installer (portabel). Update membuka halaman Releases. |
 | `Senandung-<versi>-x86_64.AppImage` | Linux, satu file tanpa perlu Python atau pip (tetap butuh `playerctl` terpasang). `chmod +x`, lalu jalankan. **Update sekarang** di menu Tentang menggantinya langsung. |
-| `SHA256SUMS` | Checksum untuk `.sh` dan `.ps1`. |
+| `SHA256SUMS` | SHA-256 semua berkas di atas. **Update sekarang** di aplikasi menolak memasang berkas yang tidak punya checksum. |
 
 File di `packaging/` adalah **template** tanpa isi aplikasi, jadi jangan dijalankan langsung. Untuk membuat installer sendiri dari source:
 

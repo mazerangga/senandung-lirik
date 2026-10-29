@@ -71,7 +71,7 @@ The easiest way: get the ready-made files from the **Releases** page. Each relea
 | `install-senandung.sh` | Linux. |
 | `Senandung.exe` | Windows, the app alone with no installer (portable). Updates open the Releases page. |
 | `Senandung-<version>-x86_64.AppImage` | Linux, single file with no Python or pip needed (still needs `playerctl` installed). `chmod +x`, then run. **Update now** in the About menu replaces it in place. |
-| `SHA256SUMS` | Checksums for the `.sh` and `.ps1`. |
+| `SHA256SUMS` | SHA-256 of every file above. **Update now** in the app refuses to install a file that has no checksum. |
 
 The files in `packaging/` are **templates** without the app inside, so do not run them directly. To build the installers yourself from source:
 

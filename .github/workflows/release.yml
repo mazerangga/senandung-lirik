@@ -5,15 +5,19 @@ on:
     tags:
       - 'v*'  # Otomatis berjalan setiap kali Anda push tag versi (contoh: v1.1)
 
+# Aksi dipin ke SHA commit (tag bisa digeser). Perbarui lewat Dependabot atau 'git ls-remote' + ganti komentar tag.
+permissions:
+  contents: read
+
 jobs:
   build-installers:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.12'
 
@@ -30,7 +34,7 @@ jobs:
           python tools/build_installers.py --version "${REF_NAME#v}"
 
       - name: Upload Installers Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: installers
           path: dist/
@@ -39,16 +43,16 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.12'
 
       - name: Install PyInstaller and Dependencies
         run: |
-          pip install pyinstaller PySide6-Essentials pykakasi pypinyin korean-romanizer unidecode winrt-runtime winrt-Windows.Media.Control winrt-Windows.Foundation winrt-Windows.Foundation.Collections winrt-Windows.Storage.Streams
+          pip install pyinstaller -r requirements.txt
 
       - name: Stamp version into source
         shell: pwsh
@@ -84,7 +88,7 @@ jobs:
           if (-not (Test-Path dist/Senandung.exe)) { Write-Error "dist/Senandung.exe tidak terbentuk"; exit 1 }
 
       - name: Upload EXE Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: windows-exe
           path: dist/Senandung.exe
@@ -107,7 +111,7 @@ jobs:
           $isl = Join-Path (Split-Path $iscc) "Languages\Indonesian.isl"
           try {
             Invoke-WebRequest -UseBasicParsing -OutFile $isl `
-              "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/Indonesian.isl"
+              "https://raw.githubusercontent.com/jrsoftware/issrc/2527da77ff7983514f535d19391a748c5d898336/Files/Languages/Unofficial/Indonesian.isl"
           } catch { Write-Warning "Indonesian.isl tidak terunduh: $_" }
 
           $env:SENANDUNG_VERSION = $env:REF_NAME.TrimStart('v')
@@ -124,7 +128,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Upload Setup Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: windows-setup
           path: installer-out/*.exe
@@ -134,10 +138,10 @@ jobs:
     runs-on: ubuntu-22.04   # distro lama: AppImage jalan di lebih banyak distro (glibc lebih rendah)
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: '3.12'
 
@@ -155,7 +159,7 @@ jobs:
         run: bash tools/build_appimage.sh "${REF_NAME#v}"
 
       - name: Upload AppImage Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: linux-appimage
           path: dist/*.AppImage
@@ -168,16 +172,27 @@ jobs:
       contents: write # Wajib agar bot GitHub memiliki akses membuat rilis dan mengunggah file
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
           path: all-artifacts
 
+      # Satu SHA256SUMS untuk SEMUA berkas rilis. Fitur "Update now" di aplikasi membacanya dan menolak
+      # memasang berkas yang tidak punya checksum.
+      - name: Collect assets and write SHA256SUMS
+        run: |
+          mkdir release-files
+          cp all-artifacts/installers/install-senandung.sh \
+             all-artifacts/installers/install-senandung.ps1 \
+             all-artifacts/windows-exe/Senandung.exe \
+             all-artifacts/windows-setup/*.exe \
+             all-artifacts/linux-appimage/*.AppImage \
+             release-files/
+          (cd release-files && sha256sum -- * > ../SHA256SUMS)
+          mv SHA256SUMS release-files/
+          cat release-files/SHA256SUMS
+
       - name: Create GitHub Release & Upload Assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          files: |
-            all-artifacts/installers/*
-            all-artifacts/windows-exe/Senandung.exe
-            all-artifacts/windows-setup/*.exe
-            all-artifacts/linux-appimage/*.AppImage
+          files: release-files/*
           generate_release_notes: true # Membuat changelog otomatis dari riwayat commit
